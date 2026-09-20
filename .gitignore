@@ -1,0 +1,14 @@
+/node_modules
+/.next/
+/out/
+next-env.d.ts
+/dist-installer/
+/android
+*.exe
+*.apk
+/data/*.db
+*.db
+*.db-wal
+*.db-shm
+.DS_Store
+.env*

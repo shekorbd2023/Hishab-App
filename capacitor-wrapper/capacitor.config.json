@@ -1,0 +1,10 @@
+{
+  "appId": "app.hishab.mobile",
+  "appName": "Hishab",
+  "webDir": "www",
+  "server": {
+    "url": "https://REPLACE-WITH-YOUR-RAILWAY-URL.up.railway.app",
+    "androidScheme": "https",
+    "cleartext": true
+  }
+}
