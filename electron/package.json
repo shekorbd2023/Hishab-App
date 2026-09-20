@@ -1,6 +1,6 @@
 {
   "name": "hishab-desktop",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "main": "main.js",
   "scripts": { "dist": "electron-builder --win nsis --publish never" },
@@ -9,11 +9,6 @@
     "productName": "Hishab",
     "directories": { "output": "../dist-installer" },
     "files": ["main.js", "package.json"],
-    "extraResources": [
-      { "from": "../.next/standalone", "to": "standalone", "filter": ["**/*"] },
-      { "from": "../.next/static", "to": "standalone/.next/static", "filter": ["**/*"] },
-      { "from": "../public", "to": "standalone/public", "filter": ["**/*"] }
-    ],
     "win": { "target": "nsis" },
     "nsis": { "oneClick": false, "perMachine": false, "allowToChangeInstallationDirectory": true }
   },

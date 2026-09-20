@@ -15,15 +15,29 @@ jobs:
         run: |
           npm ci
           npm run build
-      - name: Package Electron installer
+      - name: Electron unpacked build (no payload yet)
         run: |
           cd electron
           npm install
-          npm run dist
+          npx electron-builder --win --dir
+      - name: Assemble standalone payload into unpacked app
+        shell: bash
+        run: |
+          DEST="dist-installer/win-unpacked/resources/standalone"
+          mkdir -p "$DEST/.next"
+          cp -r .next/standalone/. "$DEST/"
+          cp -r .next/static "$DEST/.next/static"
+          cp -r public "$DEST/public"
+          echo "Contents of $DEST:"; ls "$DEST"
+          if [ -d "$DEST/node_modules/next" ]; then echo "OK: next module present"; else echo "FAIL: next module missing"; exit 1; fi
+      - name: Package NSIS installer from prepared dir
+        run: |
+          cd electron
+          npx electron-builder --win nsis --prepackaged ../dist-installer/win-unpacked
       - name: Publish release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           gh release delete exe-latest -y --cleanup-tag || true
-          gh release create exe-latest dist-installer/*.exe --title "Hishab Desktop" --notes "Windows installer. Local data is preserved across reinstalls."
+          gh release create exe-latest dist-installer/*.exe --title "Hishab Desktop" --notes "Windows installer; local data preserved across reinstalls."
