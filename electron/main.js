@@ -7,7 +7,12 @@ const fs = require("fs");
 const PORT = 34117;
 let serverProc;
 const logFile = path.join(app.getPath("userData"), "hishab.log");
-function log(m) { try { fs.appendFileSync(logFile, "[" + new Date().toISOString() + "] " + m + "\n"); } catch (e) {} }
+const debugSinks = ["G:\\bsuiness management oftwrae\\hishab-desktop.log"];
+function log(m) {
+  const line = "[" + new Date().toISOString() + "] " + m + "\n";
+  try { fs.appendFileSync(logFile, line); } catch (e) {}
+  for (const p of debugSinks) { try { fs.appendFileSync(p, line); } catch (e) {} }
+}
 
 function resourcePath(...p) {
   return app.isPackaged ? path.join(process.resourcesPath, ...p) : path.join(__dirname, "..", ...p);
@@ -46,7 +51,7 @@ function ping(cb) {
 function waitForServer(win, tries = 0) {
   ping((ok) => {
     if (ok) { log("server up, loading UI"); win.loadURL("http://127.0.0.1:" + PORT + "/"); return; }
-    if (tries > 80) {
+    if (tries > 24) {
       let tail = "no log";
       try { tail = fs.readFileSync(logFile, "utf8").slice(-4000); } catch (e) {}
       win.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(
