@@ -22,6 +22,7 @@ function startServer() {
   const dir = resourcePath("standalone");
   const serverJs = path.join(dir, "server.js");
   log("server.js=" + serverJs + " exists=" + fs.existsSync(serverJs));
+  log("node_modules/next exists=" + fs.existsSync(path.join(dir, "node_modules", "next")));
   serverProc = fork(serverJs, [], {
     cwd: dir,
     execArgv: ["--experimental-sqlite"],
