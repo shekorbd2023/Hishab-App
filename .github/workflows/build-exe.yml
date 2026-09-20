@@ -23,12 +23,13 @@ jobs:
       - name: Assemble standalone payload into unpacked app
         shell: bash
         run: |
+          set -x
           DEST="dist-installer/win-unpacked/resources/standalone"
-          mkdir -p "$DEST/.next"
+          mkdir -p "$DEST/.next" "$DEST/public"
           cp -r .next/standalone/. "$DEST/"
-          cp -r .next/static "$DEST/.next/static"
-          cp -r public "$DEST/public"
-          echo "Contents of $DEST:"; ls "$DEST"
+          if [ -d .next/static ]; then cp -r .next/static "$DEST/.next/static"; fi
+          if [ -d public ]; then cp -r public/. "$DEST/public/"; fi
+          echo "Contents of $DEST:"; ls -a "$DEST"
           if [ -d "$DEST/node_modules/next" ]; then echo "OK: next module present"; else echo "FAIL: next module missing"; exit 1; fi
       - name: Package NSIS installer from prepared dir
         run: |
