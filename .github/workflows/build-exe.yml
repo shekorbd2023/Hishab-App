@@ -1,0 +1,29 @@
+name: Build Windows EXE
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Build Next standalone
+        run: |
+          npm ci
+          npm run build
+      - name: Package Electron installer
+        run: |
+          cd electron
+          npm install
+          npm run dist
+      - name: Publish release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          gh release delete exe-latest -y --cleanup-tag || true
+          gh release create exe-latest dist-installer/*.exe --title "Hishab Desktop" --notes "Windows installer. Local data is preserved across reinstalls."
