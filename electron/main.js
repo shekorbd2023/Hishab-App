@@ -17,6 +17,7 @@ function resourcePath(...p) {
 function startServer() {
   const serverJs = resourcePath("standalone", "server.js");
   serverProc = fork(serverJs, [], {
+    execArgv: ["--experimental-sqlite"],
     env: {
       ...process.env,
       ELECTRON_RUN_AS_NODE: "1",
