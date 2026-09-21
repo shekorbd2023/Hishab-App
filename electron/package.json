@@ -1,6 +1,6 @@
 {
   "name": "hishab-desktop",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "main": "main.js",
   "scripts": { "dist": "electron-builder --win nsis --publish never" },
