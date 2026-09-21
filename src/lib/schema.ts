@@ -205,6 +205,17 @@ CREATE TABLE IF NOT EXISTS settings (
   json TEXT
 );
 
+CREATE TABLE IF NOT EXISTS stock_adjustments (
+  id TEXT PRIMARY KEY,
+  business_id TEXT NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  qty_delta REAL NOT NULL DEFAULT 0,
+  reason TEXT,
+  date TEXT NOT NULL,
+  created_by TEXT,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS counters (
   business_id TEXT NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
   kind TEXT NOT NULL,

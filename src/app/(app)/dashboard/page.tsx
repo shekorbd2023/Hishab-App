@@ -58,6 +58,17 @@ export default async function Dashboard() {
      WHERE r.business_id = ? AND r.done = 0 ORDER BY r.due_date ASC LIMIT 5`, [bid]
   );
 
+  const topItems = all<{ name: string; amt: number }>(
+    `SELECT di.name, SUM(di.amount) amt FROM doc_items di JOIN documents d ON d.id=di.document_id
+     WHERE d.business_id=? AND d.kind='sales_invoice' AND d.date>=? AND d.date<=?
+     GROUP BY di.name ORDER BY amt DESC LIMIT 5`, [bid, from, to]
+  );
+  const topCustomers = all<{ name: string; amt: number }>(
+    `SELECT p.name, SUM(d.total) amt FROM documents d JOIN parties p ON p.id=d.party_id
+     WHERE d.business_id=? AND d.kind='sales_invoice' AND d.date>=? AND d.date<=?
+     GROUP BY p.id ORDER BY amt DESC LIMIT 5`, [bid, from, to]
+  );
+
   // Health indicators
   const cover = payable > 0 ? receivable / payable : receivable > 0 ? 2 : 1;
   const health = cover >= 1.2 ? "green" : cover >= 0.8 ? "amber" : "red";
@@ -125,6 +136,26 @@ export default async function Dashboard() {
             <p className="text-muted" style={{ fontSize: ".82rem", marginTop: ".4rem" }}>
               Receivable vs payable cover: <b style={{ color: "var(--text)" }}>{cover.toFixed(2)}×</b>
             </p>
+          </div>
+
+          <div className="card" style={{ padding: "1.1rem" }}>
+            <h3 style={{ fontWeight: 700, marginBottom: ".5rem" }}>Top Items (this month)</h3>
+            {topItems.length === 0 ? <p className="text-muted" style={{ fontSize: ".85rem" }}>No sales yet.</p> : topItems.map((it) => (
+              <div key={it.name} style={{ display: "flex", justifyContent: "space-between", fontSize: ".85rem", padding: ".2rem 0" }}>
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 150 }}>{it.name}</span>
+                <span style={{ fontWeight: 600 }}>{money(it.amt, sym)}</span>
+              </div>
+            ))}
+          </div>
+
+          <div className="card" style={{ padding: "1.1rem" }}>
+            <h3 style={{ fontWeight: 700, marginBottom: ".5rem" }}>Top Customers (this month)</h3>
+            {topCustomers.length === 0 ? <p className="text-muted" style={{ fontSize: ".85rem" }}>No sales yet.</p> : topCustomers.map((c) => (
+              <div key={c.name} style={{ display: "flex", justifyContent: "space-between", fontSize: ".85rem", padding: ".2rem 0" }}>
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 150 }}>{c.name}</span>
+                <span style={{ fontWeight: 600 }}>{money(c.amt, sym)}</span>
+              </div>
+            ))}
           </div>
 
           <div className="card" style={{ padding: "1.1rem" }}>

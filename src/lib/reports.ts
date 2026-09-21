@@ -20,22 +20,81 @@ function cogsFor(bid: string, from?: string, to?: string): number {
   return (all<{ s: number }>(sql, p)[0]?.s) ?? 0;
 }
 
-export function buildReport(bid: string, type: string, from: string, to: string, sym: string): Report {
+export function buildReport(bid: string, type: string, from: string, to: string, sym: string, opts: { partyId?: string } = {}): Report {
   const m = (n: number) => `${sym} ${(n || 0).toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
+  const partyId = opts.partyId && opts.partyId !== "all" ? opts.partyId : undefined;
 
-  if (type === "sales" || type === "purchase") {
-    const kind = type === "sales" ? "sales_invoice" : "purchase_bill";
+  if (type === "sales" || type === "purchase" || type === "sales-return" || type === "purchase-return") {
+    const kind = type === "sales" ? "sales_invoice" : type === "purchase" ? "purchase_bill" : type === "sales-return" ? "sales_return" : "purchase_return";
+    const params: unknown[] = [bid, kind, from, to];
+    let where = "d.business_id=? AND d.kind=? AND d.date>=? AND d.date<=?";
+    if (partyId) { where += " AND d.party_id=?"; params.push(partyId); }
     const rows = all<{ number: number; date: string; total: number; status: string; pname: string | null }>(
       `SELECT d.number, d.date, d.total, d.status, p.name pname FROM documents d
-       LEFT JOIN parties p ON p.id = d.party_id
-       WHERE d.business_id=? AND d.kind=? AND d.date>=? AND d.date<=? ORDER BY d.date`, [bid, kind, from, to]
+       LEFT JOIN parties p ON p.id = d.party_id WHERE ${where} ORDER BY d.date`, params
     );
     const total = rows.reduce((a, r) => a + r.total, 0);
+    const titles: Record<string, string> = { sales: "Sales Report", purchase: "Purchase Report", "sales-return": "Sales Return Report", "purchase-return": "Purchase Return Report" };
     return {
-      title: type === "sales" ? "Sales Report" : "Purchase Report",
+      title: titles[type],
       headers: ["No.", "Date", "Party", "Status", "Total"],
       rows: rows.map((r) => [r.number, r.date, r.pname || "Cash Sale", r.status, r.total.toFixed(2)]),
       summary: [{ label: "Total", value: m(total) }, { label: "Count", value: String(rows.length) }],
+    };
+  }
+
+  if (type === "party-statement") {
+    if (!partyId) return { title: "Party Statement", headers: ["Info"], rows: [["Select a party above to view their statement."]] };
+    const KIND: Record<string, [string, number]> = {
+      sales_invoice: ["Sales Invoice", 1], sales_return: ["Sales Return", -1],
+      purchase_bill: ["Purchase Bill", -1], purchase_return: ["Purchase Return", 1],
+    };
+    const docs = all<{ kind: string; number: number; date: string; total: number }>(
+      `SELECT kind, number, date, total FROM documents WHERE business_id=? AND party_id=? AND date>=? AND date<=? AND kind!='quotation'`, [bid, partyId, from, to]
+    );
+    const pays = all<{ kind: string; amount: number; date: string }>(
+      `SELECT kind, amount, date FROM payments WHERE business_id=? AND party_id=? AND date>=? AND date<=?`, [bid, partyId, from, to]
+    );
+    type E = { date: string; label: string; debit: number; credit: number };
+    const entries: E[] = [
+      ...docs.map((d) => { const [lbl, sgn] = KIND[d.kind] || [d.kind, 1]; return { date: d.date, label: `${lbl} #${d.number}`, debit: sgn > 0 ? d.total : 0, credit: sgn < 0 ? d.total : 0 }; }),
+      ...pays.map((p) => ({ date: p.date, label: p.kind === "in" ? "Payment In" : "Payment Out", debit: p.kind === "out" ? p.amount : 0, credit: p.kind === "in" ? p.amount : 0 })),
+    ].sort((a, b) => (a.date < b.date ? -1 : 1));
+    let bal = 0;
+    const rows = entries.map((e) => { bal += e.debit - e.credit; return [e.date, e.label, e.debit ? e.debit.toFixed(2) : "", e.credit ? e.credit.toFixed(2) : "", bal.toFixed(2)]; });
+    return {
+      title: "Party Statement",
+      headers: ["Date", "Particulars", "Debit", "Credit", "Balance"],
+      rows,
+      summary: [{ label: "Closing balance", value: `${bal >= 0 ? "Receivable " : "Payable "}${m(Math.abs(bal))}` }],
+    };
+  }
+
+  if (type === "discount") {
+    const rows = all<{ pname: string | null; kind: string; d: number }>(
+      `SELECT p.name pname, d.kind, SUM(d.discount_total) d FROM documents d LEFT JOIN parties p ON p.id=d.party_id
+       WHERE d.business_id=? AND d.date>=? AND d.date<=? AND d.discount_total>0 GROUP BY d.party_id, d.kind ORDER BY d DESC`, [bid, from, to]
+    );
+    const total = rows.reduce((a, r) => a + r.d, 0);
+    return {
+      title: "Discount Report",
+      headers: ["Party", "Type", "Discount"],
+      rows: rows.map((r) => [r.pname || "Cash Sale", r.kind.replace("_", " "), r.d.toFixed(2)]),
+      summary: [{ label: "Total discount", value: m(total) }],
+    };
+  }
+
+  if (type === "tax") {
+    const rows = all<{ number: number; date: string; kind: string; tax_total: number; total: number; pname: string | null }>(
+      `SELECT d.number, d.date, d.kind, d.tax_total, d.total, p.name pname FROM documents d LEFT JOIN parties p ON p.id=d.party_id
+       WHERE d.business_id=? AND d.date>=? AND d.date<=? AND d.tax_total>0 ORDER BY d.date`, [bid, from, to]
+    );
+    const total = rows.reduce((a, r) => a + r.tax_total, 0);
+    return {
+      title: "Tax Report",
+      headers: ["No.", "Date", "Type", "Party", "Tax"],
+      rows: rows.map((r) => [r.number, r.date, r.kind.replace("_", " "), r.pname || "Cash Sale", r.tax_total.toFixed(2)]),
+      summary: [{ label: "Total tax", value: m(total) }],
     };
   }
 

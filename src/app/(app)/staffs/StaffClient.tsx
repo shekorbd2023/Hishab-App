@@ -5,13 +5,16 @@ import { useT } from "@/components/Providers";
 import { Modal, PageHeader } from "@/components/Modal";
 import { api } from "@/lib/clientUtil";
 
-type Member = { user_id: string; role: string; status: string; joined_at: string; name: string; email: string };
+type Member = { user_id: string; role: string; status: string; joined_at: string; name: string; email: string; permissions: string | null };
 const ROLES = ["Admin", "Partner", "Staff"];
+const MODULES = ["parties", "inventory", "sales", "purchase", "expense", "income", "accounts", "reports"];
+const ACTIONS = ["view", "create", "edit", "delete"];
 
 export default function StaffClient({ members, canManage, ownerId }: { members: Member[]; canManage: boolean; ownerId: string }) {
   const { t } = useT();
   const router = useRouter();
   const [show, setShow] = useState(false);
+  const [permFor, setPermFor] = useState<Member | null>(null);
 
   async function changeRole(user_id: string, role: string) {
     await api("/api/staff", { op: "role", user_id, role });
@@ -49,8 +52,11 @@ export default function StaffClient({ members, canManage, ownerId }: { members: 
                     ) : <span className="pill pill-muted">{m.role}</span>}
                 </td>
                 <td><span className="pill pill-green">{m.status}</span></td>
-                <td style={{ textAlign: "right" }}>
-                  {canManage && m.user_id !== ownerId && <button className="btn btn-danger" style={{ padding: ".2rem .45rem" }} onClick={() => remove(m.user_id)}>✕</button>}
+                <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                  {canManage && m.user_id !== ownerId && m.role === "Staff" && (
+                    <button className="btn" style={{ padding: ".2rem .5rem" }} onClick={() => setPermFor(m)}>Permissions</button>
+                  )}
+                  {canManage && m.user_id !== ownerId && <button className="btn btn-danger" style={{ padding: ".2rem .45rem", marginLeft: 4 }} onClick={() => remove(m.user_id)}>✕</button>}
                 </td>
               </tr>
             ))}
@@ -58,7 +64,54 @@ export default function StaffClient({ members, canManage, ownerId }: { members: 
         </table>
       </div>
       {show && <InviteForm onClose={() => setShow(false)} onSaved={() => { setShow(false); router.refresh(); }} />}
+      {permFor && <PermissionsModal member={permFor} onClose={() => setPermFor(null)} onSaved={() => { setPermFor(null); router.refresh(); }} />}
     </div>
+  );
+}
+
+function PermissionsModal({ member, onClose, onSaved }: { member: Member; onClose: () => void; onSaved: () => void }) {
+  const initial: Record<string, string[]> = (() => {
+    try { return member.permissions ? JSON.parse(member.permissions) : {}; } catch { return {}; }
+  })();
+  const [perms, setPerms] = useState<Record<string, string[]>>(initial);
+  const has = (mod: string, act: string) => (perms[mod] || []).includes(act);
+  function toggle(mod: string, act: string) {
+    setPerms((p) => {
+      const cur = new Set(p[mod] || []);
+      if (cur.has(act)) cur.delete(act); else cur.add(act);
+      if (act !== "view" && cur.size > 0) cur.add("view");
+      return { ...p, [mod]: Array.from(cur) };
+    });
+  }
+  async function save() {
+    const { ok, data } = await api("/api/staff", { op: "permissions", user_id: member.user_id, permissions: perms });
+    if (ok) onSaved(); else alert((data.error as string) || "Failed");
+  }
+  return (
+    <Modal title={`Permissions — ${member.name}`} onClose={onClose} wide>
+      <p className="text-muted" style={{ fontSize: ".82rem", marginBottom: ".6rem" }}>Tick what this staff member can do in each area. (Owner/Admin/Partner always have full access.)</p>
+      <div style={{ overflowX: "auto" }} className="scroll-thin">
+        <table className="tbl">
+          <thead><tr><th>Module</th>{ACTIONS.map((a) => <th key={a} style={{ textAlign: "center", textTransform: "capitalize" }}>{a}</th>)}</tr></thead>
+          <tbody>
+            {MODULES.map((mod) => (
+              <tr key={mod}>
+                <td style={{ textTransform: "capitalize", fontWeight: 600 }}>{mod}</td>
+                {ACTIONS.map((a) => (
+                  <td key={a} style={{ textAlign: "center" }}>
+                    <input type="checkbox" checked={has(mod, a)} onChange={() => toggle(mod, a)} />
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ display: "flex", gap: ".5rem", marginTop: "1rem" }}>
+        <button className="btn btn-primary" onClick={save}>Save permissions</button>
+        <button className="btn" onClick={onClose}>Cancel</button>
+      </div>
+    </Modal>
   );
 }
 

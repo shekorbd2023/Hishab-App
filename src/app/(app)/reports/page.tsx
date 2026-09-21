@@ -11,6 +11,8 @@ const GROUPS: { title: string; items: { href: string; label: string; desc: strin
     items: [
       { href: "/reports/sales", label: "Sales", desc: "All sales in a period" },
       { href: "/reports/purchase", label: "Purchase", desc: "All purchases in a period" },
+      { href: "/reports/sales-return", label: "Sales Return", desc: "Returned sales in a period" },
+      { href: "/reports/purchase-return", label: "Purchase Return", desc: "Returned purchases in a period" },
       { href: "/reports/day-book", label: "Day Book", desc: "Every transaction, day by day" },
       { href: "/reports/profit-loss", label: "Profit & Loss", desc: "Revenue, COGS, expenses, net profit" },
     ],
@@ -19,6 +21,14 @@ const GROUPS: { title: string; items: { href: string; label: string; desc: strin
     title: "Parties",
     items: [
       { href: "/reports/all-parties", label: "All Party Report", desc: "Receivable / payable of every party" },
+      { href: "/reports/party-statement", label: "Party Statement", desc: "Debit/credit ledger for one party" },
+    ],
+  },
+  {
+    title: "Business status",
+    items: [
+      { href: "/reports/discount", label: "Discount Report", desc: "Discounts given, by party" },
+      { href: "/reports/tax", label: "Tax Report", desc: "Tax collected on sales & purchases" },
     ],
   },
   {

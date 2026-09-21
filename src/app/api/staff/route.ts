@@ -28,6 +28,12 @@ export async function POST(req: Request) {
     logAudit({ businessId: bid, userId: ctx.user.id, userName: ctx.user.name, action: "update", entity: "staff", summary: `Changed role to ${body.role}` });
     return NextResponse.json({ ok: true });
   }
+  if (op === "permissions") {
+    const json = JSON.stringify(body.permissions || {});
+    run("UPDATE business_members SET permissions=? WHERE business_id=? AND user_id=?", [json, bid, body.user_id]);
+    logAudit({ businessId: bid, userId: ctx.user.id, userName: ctx.user.name, action: "update", entity: "staff", summary: "Updated staff permissions" });
+    return NextResponse.json({ ok: true });
+  }
   if (op === "remove") {
     if (body.user_id === ctx.business.owner_id) return NextResponse.json({ error: "Cannot remove the owner." }, { status: 400 });
     run("DELETE FROM business_members WHERE business_id=? AND user_id=?", [bid, body.user_id]);

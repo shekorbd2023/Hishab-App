@@ -82,4 +82,8 @@ a { color: inherit; }
   main { padding: 0 !important; }
   .print-area { border: none !important; box-shadow: none !important; max-width: 100% !important; }
   body { background: #fff !important; }
+  body.thermal .print-area { max-width: 72mm !important; padding: 4mm !important; font-size: 11px !important; }
+  body.thermal .print-area table.tbl th, body.thermal .print-area table.tbl td { padding: 2px 3px !important; font-size: 10px !important; }
+  body.thermal .print-area img { height: 34px !important; }
 }
+@page { margin: 12mm; }

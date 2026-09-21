@@ -116,6 +116,14 @@ export function itemStocks(businessId: string): Record<string, number> {
     else if (r.kind === "sales_invoice") stock[r.item_id] -= r.q;
     else if (r.kind === "purchase_return") stock[r.item_id] -= r.q;
   }
+  const adj = all<{ item_id: string; q: number }>(
+    "SELECT item_id, SUM(qty_delta) q FROM stock_adjustments WHERE business_id = ? GROUP BY item_id",
+    [businessId]
+  );
+  for (const a of adj) {
+    if (stock[a.item_id] === undefined) stock[a.item_id] = 0;
+    stock[a.item_id] += a.q;
+  }
   return stock;
 }
 

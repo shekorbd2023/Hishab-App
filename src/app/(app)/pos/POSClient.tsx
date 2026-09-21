@@ -17,6 +17,8 @@ export default function POSClient({ items, accounts, parties, symbol }: { items:
   const [partyId, setPartyId] = useState("");
   const [accountId, setAccountId] = useState(accounts[0]?.id || "");
   const [busy, setBusy] = useState(false);
+  const [received, setReceived] = useState<number | "">("");
+  const [held, setHeld] = useState<{ id: number; cart: Record<string, number>; partyId: string; total: number }[]>([]);
 
   const cats = useMemo(() => ["all", ...Array.from(new Set(items.map((i) => i.category).filter(Boolean))) as string[]], [items]);
   const shown = useMemo(() => items.filter((it) =>
@@ -29,13 +31,29 @@ export default function POSClient({ items, accounts, parties, symbol }: { items:
   const add = (id: string) => setCart((c) => ({ ...c, [id]: (c[id] || 0) + 1 }));
   const setQty = (id: string, qty: number) => setCart((c) => { const n = { ...c }; if (qty <= 0) delete n[id]; else n[id] = qty; return n; });
 
+  const paidEntered = received === "" ? total : Number(received);
+  const change = paidEntered > total ? paidEntered - total : 0;
+  const due = paidEntered < total ? total - paidEntered : 0;
+
+  function holdBill() {
+    if (cartLines.length === 0) return;
+    setHeld((h) => [...h, { id: Date.now(), cart: { ...cart }, partyId, total }]);
+    setCart({}); setReceived(""); setPartyId("");
+  }
+  function resumeBill(id: number) {
+    const b = held.find((x) => x.id === id);
+    if (!b) return;
+    setCart(b.cart); setPartyId(b.partyId);
+    setHeld((h) => h.filter((x) => x.id !== id));
+  }
+
   async function checkout() {
     if (cartLines.length === 0) return;
     setBusy(true);
     const lines = cartLines.map((c) => ({ itemId: c.item.id, name: c.item.name, qty: c.qty, rate: c.item.sales_price, discountType: "flat", discountValue: 0, taxRate: 0 }));
     const { ok, data } = await api("/api/documents", {
       op: "create", kind: "sales_invoice", party_id: partyId || null, date: new Date().toISOString().slice(0, 10),
-      payment_mode: "Cash", account_id: accountId || null, paid_amount: total, lines,
+      payment_mode: "Cash", account_id: accountId || null, paid_amount: Math.min(paidEntered, total), lines,
     });
     setBusy(false);
     if (ok) router.push(`/doc/${data.id}`); else alert((data.error as string) || "Failed");
@@ -68,7 +86,19 @@ export default function POSClient({ items, accounts, parties, symbol }: { items:
       </div>
 
       <div className="card" style={{ padding: "1rem", position: "sticky", top: 70 }}>
-        <h2 style={{ fontWeight: 700, marginBottom: ".5rem" }}>Cart ({cartLines.length})</h2>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: ".5rem" }}>
+          <h2 style={{ fontWeight: 700 }}>Cart ({cartLines.length})</h2>
+          <button className="btn" style={{ padding: ".2rem .5rem", fontSize: ".8rem" }} onClick={holdBill} disabled={cartLines.length === 0}>⏸ Hold</button>
+        </div>
+        {held.length > 0 && (
+          <div style={{ display: "flex", gap: ".3rem", flexWrap: "wrap", marginBottom: ".5rem" }}>
+            {held.map((b) => (
+              <button key={b.id} className="btn" style={{ padding: ".2rem .5rem", fontSize: ".78rem" }} onClick={() => resumeBill(b.id)}>
+                ▶ {m(b.total, symbol)}
+              </button>
+            ))}
+          </div>
+        )}
         <select className="input" value={partyId} onChange={(e) => setPartyId(e.target.value)} style={{ marginBottom: ".5rem" }}>
           <option value="">Cash Sale</option>
           {parties.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
@@ -86,10 +116,16 @@ export default function POSClient({ items, accounts, parties, symbol }: { items:
               </div>
             ))}
         </div>
-        <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 800, fontSize: "1.15rem", margin: ".75rem 0" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 800, fontSize: "1.15rem", margin: ".75rem 0 .5rem" }}>
           <span>{t("total")}</span><span>{m(total, symbol)}</span>
         </div>
-        <select className="input" value={accountId} onChange={(e) => setAccountId(e.target.value)} style={{ marginBottom: ".5rem" }}>
+        <div style={{ display: "flex", gap: ".4rem", alignItems: "center", marginBottom: ".4rem" }}>
+          <span className="text-muted" style={{ fontSize: ".85rem", minWidth: 70 }}>Received</span>
+          <input className="input" type="number" placeholder={String(total)} value={received} onChange={(e) => setReceived(e.target.value === "" ? "" : Number(e.target.value))} />
+        </div>
+        {change > 0 && <div style={{ display: "flex", justifyContent: "space-between", fontSize: ".9rem", color: "var(--brand)" }}><span>Change</span><b>{m(change, symbol)}</b></div>}
+        {due > 0 && <div style={{ display: "flex", justifyContent: "space-between", fontSize: ".9rem", color: "var(--red)" }}><span>Due (credit)</span><b>{m(due, symbol)}</b></div>}
+        <select className="input" value={accountId} onChange={(e) => setAccountId(e.target.value)} style={{ margin: ".5rem 0" }}>
           {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
         </select>
         <button className="btn btn-primary" style={{ width: "100%", justifyContent: "center" }} onClick={checkout} disabled={busy || cartLines.length === 0}>

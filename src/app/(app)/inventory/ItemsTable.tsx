@@ -1,5 +1,6 @@
 "use client";
 import { useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useT } from "@/components/Providers";
 import { Modal, PageHeader } from "@/components/Modal";
@@ -21,6 +22,7 @@ export default function ItemsTable({ items, symbol }: { items: Item[]; symbol: s
   const [cat, setCat] = useState("all");
   const [editing, setEditing] = useState<Item | null>(null);
   const [showForm, setShowForm] = useState(false);
+  const [adjust, setAdjust] = useState<Item | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const cats = useMemo(() => Array.from(new Set(items.map((i) => i.category).filter(Boolean))) as string[], [items]);
@@ -47,6 +49,7 @@ export default function ItemsTable({ items, symbol }: { items: Item[]; symbol: s
   return (
     <div>
       <PageHeader title={t("inventory")} count={items.length}>
+        <Link className="btn" href="/inventory/labels">🏷️ Barcode labels</Link>
         <button className="btn" onClick={exportCsv}>⬇ {t("export_csv")}</button>
         <button className="btn" onClick={() => fileRef.current?.click()}>⬆ {t("import_csv")}</button>
         <input ref={fileRef} type="file" accept=".csv" hidden onChange={onImport} />
@@ -81,7 +84,10 @@ export default function ItemsTable({ items, symbol }: { items: Item[]; symbol: s
                   <td style={{ textAlign: "right", color: it.stock <= it.low_stock_alert ? "var(--red)" : "inherit", fontWeight: 600 }}>
                     {it.stock} {it.unit}
                   </td>
-                  <td style={{ textAlign: "right" }}><button className="btn" style={{ padding: ".25rem .5rem" }} onClick={() => { setEditing(it); setShowForm(true); }}>✎</button></td>
+                  <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                    <button className="btn" style={{ padding: ".25rem .5rem" }} title="Adjust stock" onClick={() => setAdjust(it)}>±</button>
+                    <button className="btn" style={{ padding: ".25rem .5rem", marginLeft: 4 }} onClick={() => { setEditing(it); setShowForm(true); }}>✎</button>
+                  </td>
                 </tr>
               ))}
               {rows.length === 0 && <tr><td colSpan={6} className="text-muted" style={{ textAlign: "center", padding: "2rem" }}>{t("no_data")}</td></tr>}
@@ -91,7 +97,38 @@ export default function ItemsTable({ items, symbol }: { items: Item[]; symbol: s
       </div>
 
       {showForm && <ItemForm item={editing} onClose={() => setShowForm(false)} onSaved={() => { setShowForm(false); router.refresh(); }} />}
+      {adjust && <AdjustModal item={adjust} symbol={symbol} onClose={() => setAdjust(null)} onSaved={() => { setAdjust(null); router.refresh(); }} />}
     </div>
+  );
+}
+
+function AdjustModal({ item, symbol, onClose, onSaved }: { item: Item; symbol: string; onClose: () => void; onSaved: () => void }) {
+  const { t } = useT();
+  const [qty, setQty] = useState(0);
+  const [dir, setDir] = useState<"in" | "out">("in");
+  const [reason, setReason] = useState("");
+  async function save() {
+    const delta = dir === "in" ? Math.abs(qty) : -Math.abs(qty);
+    if (!delta) return;
+    const { ok, data } = await api("/api/items", { op: "adjust", id: item.id, qty_delta: delta, reason });
+    if (ok) onSaved(); else alert((data.error as string) || "Failed");
+  }
+  return (
+    <Modal title={`Adjust stock — ${item.name}`} onClose={onClose}>
+      <div style={{ display: "grid", gap: ".6rem" }}>
+        <p className="text-muted" style={{ fontSize: ".82rem" }}>Current stock: <b>{item.stock} {item.unit}</b> {symbol ? "" : ""}</p>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: ".6rem" }}>
+          <div><label className="label">Direction</label>
+            <select className="input" value={dir} onChange={(e) => setDir(e.target.value as "in" | "out")}>
+              <option value="in">Stock In (+)</option><option value="out">Stock Out (−)</option>
+            </select>
+          </div>
+          <div><label className="label">{t("quantity")}</label><input className="input" type="number" value={qty} onChange={(e) => setQty(Number(e.target.value))} /></div>
+        </div>
+        <div><label className="label">Reason</label><input className="input" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. damage, correction, opening" /></div>
+        <div style={{ display: "flex", gap: ".5rem", marginTop: ".3rem" }}><button className="btn btn-primary" onClick={save}>{t("save")}</button><button className="btn" onClick={onClose}>{t("cancel")}</button></div>
+      </div>
+    </Modal>
   );
 }
 

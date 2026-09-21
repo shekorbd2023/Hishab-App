@@ -16,8 +16,10 @@ const NAV: { href: string; tkey: string; icon: string; section?: string }[] = [
   { href: "/income", tkey: "other_income", icon: "💵" },
   { href: "/accounts", tkey: "manage_accounts", icon: "🏦" },
   { href: "/reports", tkey: "reports", icon: "📊", section: "management" },
+  { href: "/reminders", tkey: "reminders", icon: "🔔" },
   { href: "/staffs", tkey: "manage_staffs", icon: "🧑‍💼" },
   { href: "/audit", tkey: "audit_log", icon: "🕵️" },
+  { href: "/settings", tkey: "settings", icon: "⚙️" },
 ];
 
 export default function AppShell({

@@ -5,13 +5,16 @@ import Link from "next/link";
 import type { Report } from "@/lib/reports";
 import { downloadCsv } from "@/lib/clientUtil";
 
-export default function ReportShell({ report, type, from, to, showDates }: { report: Report; type: string; from: string; to: string; showDates: boolean }) {
+export default function ReportShell({ report, type, from, to, showDates, parties = [], party = "all", showParty = false }: { report: Report; type: string; from: string; to: string; showDates: boolean; parties?: { id: string; name: string }[]; party?: string; showParty?: boolean }) {
   const router = useRouter();
   const [f, setF] = useState(from);
   const [tt, setTt] = useState(to);
+  const [pty, setPty] = useState(party);
 
   function apply() {
-    router.push(`/reports/${type}?from=${f}&to=${tt}`);
+    const q = new URLSearchParams({ from: f, to: tt });
+    if (showParty) q.set("party", pty);
+    router.push(`/reports/${type}?${q.toString()}`);
   }
   function exportCsv() {
     downloadCsv(`${type}.csv`, report.headers, report.rows);
@@ -25,13 +28,21 @@ export default function ReportShell({ report, type, from, to, showDates }: { rep
           <h1 style={{ fontSize: "1.4rem", fontWeight: 800 }}>{report.title}</h1>
         </div>
         <div style={{ display: "flex", gap: ".4rem", flexWrap: "wrap", alignItems: "end" }}>
+          {showParty && (
+            <div><label className="label">Party</label>
+              <select className="input" value={pty} onChange={(e) => setPty(e.target.value)} style={{ minWidth: 160 }}>
+                <option value="all">{type === "party-statement" ? "— select —" : "All parties"}</option>
+                {parties.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </div>
+          )}
           {showDates && (
             <>
               <div><label className="label">From</label><input className="input" type="date" value={f} onChange={(e) => setF(e.target.value)} /></div>
               <div><label className="label">To</label><input className="input" type="date" value={tt} onChange={(e) => setTt(e.target.value)} /></div>
-              <button className="btn btn-primary" onClick={apply}>Apply</button>
             </>
           )}
+          {(showDates || showParty) && <button className="btn btn-primary" onClick={apply}>Apply</button>}
           <button className="btn" onClick={exportCsv}>⬇ CSV</button>
           <button className="btn" onClick={() => window.print()}>🖨 Print</button>
         </div>

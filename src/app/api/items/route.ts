@@ -53,6 +53,17 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true });
   }
 
+  if (op === "adjust") {
+    const delta = NUM(body.qty_delta);
+    if (!delta) return NextResponse.json({ error: "Enter a non-zero quantity." }, { status: 400 });
+    run(
+      "INSERT INTO stock_adjustments (id, business_id, item_id, qty_delta, reason, date, created_by, created_at) VALUES (?,?,?,?,?,?,?,?)",
+      [uid(), bid, body.id, delta, body.reason ?? null, body.date || nowIso().slice(0, 10), ctx!.user.name, nowIso()]
+    );
+    logAudit({ businessId: bid, userId: ctx!.user.id, userName: ctx!.user.name, action: "update", entity: "item", entityId: body.id, summary: `Stock adjusted by ${delta}` });
+    return NextResponse.json({ ok: true });
+  }
+
   if (op === "import") {
     const rows = parseCsv(String(body.csv || ""));
     if (rows.length < 2) return NextResponse.json({ error: "No rows" }, { status: 400 });
