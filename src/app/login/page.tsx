@@ -27,8 +27,10 @@ export default function LoginPage() {
   return (
     <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: "1rem" }}>
       <div className="card" style={{ padding: "2rem", width: "100%", maxWidth: 380 }}>
-        <div style={{ fontSize: "1.6rem", fontWeight: 800, color: "var(--brand)", marginBottom: ".25rem" }}>
-          Hishab
+        <div style={{ display: "flex", alignItems: "center", gap: ".6rem", marginBottom: ".25rem" }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logo.svg" alt="" width={42} height={42} style={{ borderRadius: 10 }} />
+          <span style={{ fontSize: "1.6rem", fontWeight: 800, color: "var(--brand)" }}>Hishab</span>
         </div>
         <p className="text-muted" style={{ marginBottom: "1.25rem", fontSize: ".9rem" }}>
           Log in to your business account.

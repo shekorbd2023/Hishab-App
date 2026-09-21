@@ -64,8 +64,10 @@ export default function AppShell({
         }}
         data-open={open}
       >
-        <div style={{ fontSize: "1.4rem", fontWeight: 800, color: "var(--brand)", padding: "0 .5rem 1rem" }}>
-          {t("app_name")}
+        <div style={{ display: "flex", alignItems: "center", gap: ".5rem", padding: "0 .5rem 1rem" }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logo.svg" alt="" width={30} height={30} style={{ borderRadius: 8 }} />
+          <span style={{ fontSize: "1.4rem", fontWeight: 800, color: "var(--brand)" }}>{t("app_name")}</span>
         </div>
 
         {/* Business switcher */}

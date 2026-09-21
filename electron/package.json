@@ -3,14 +3,31 @@
   "version": "0.1.4",
   "private": true,
   "main": "main.js",
-  "scripts": { "dist": "electron-builder --win nsis --publish never" },
+  "scripts": {
+    "dist": "electron-builder --win nsis --publish never"
+  },
   "build": {
     "appId": "app.hishab.desktop",
     "productName": "Hishab",
-    "directories": { "output": "../dist-installer" },
-    "files": ["main.js", "package.json"],
-    "win": { "target": "nsis" },
-    "nsis": { "oneClick": false, "perMachine": false, "allowToChangeInstallationDirectory": true }
+    "directories": {
+      "output": "../dist-installer"
+    },
+    "files": [
+      "main.js",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
   },
-  "devDependencies": { "electron": "^37.2.0", "electron-builder": "^26.0.12" }
+  "devDependencies": {
+    "electron": "^37.2.0",
+    "electron-builder": "^26.0.12"
+  }
 }
