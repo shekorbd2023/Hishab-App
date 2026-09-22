@@ -9,11 +9,12 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#16a34a",
+  themeColor: "#1fa06f",
 };
 
-// No-flash theme init (ship-app skill: read theme before paint).
-const themeInit = `(function(){try{var t=localStorage.getItem('hishab_theme');if(t==='dark'||(!t&&window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches)){document.documentElement.setAttribute('data-theme','dark');}}catch(e){}})();`;
+// No-flash init: restore Light / Dark / Classic / System default theme before first paint,
+// and mark the opening splash as already seen for this browser session.
+const themeInit = `(function(){try{var t=localStorage.getItem('hishab_theme')||'light';if(t==='system'){t=(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';}if(t==='dark'||t==='classic'){document.documentElement.setAttribute('data-theme',t);}if(sessionStorage.getItem('hishab_splash')){document.documentElement.setAttribute('data-splash','seen');}}catch(e){}})();`;
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (

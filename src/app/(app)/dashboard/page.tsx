@@ -1,15 +1,19 @@
 import { requireCtx } from "@/lib/auth";
 import { redirect } from "next/navigation";
-import { all } from "@/lib/db";
-import {
-  receivablePayableTotals, sumDocuments, sumExpenses, accountBalances, totalCashBank, monthRange,
-} from "@/lib/domain";
-import { getT } from "@/lib/serverI18n";
-import { money } from "@/lib/util";
 import Link from "next/link";
-import CashflowChart from "@/components/CashflowChart";
+import { all } from "@/lib/db";
+import { receivablePayableTotals, sumDocuments, sumExpenses, accountBalances, docLabel } from "@/lib/domain";
+import { getSettings } from "@/lib/settings";
+import { getT } from "@/lib/serverI18n";
+import { fmtDate, TODAY } from "@/lib/format";
+import { Icon } from "@/components/ui";
+import CashflowChart, { type CashSeries } from "@/components/CashflowChart";
+import DashActions from "./DashActions";
+import { makeMoney, buckets, fill, startOfMonth, addMonths, addDays } from "./fmt";
 
 export const dynamic = "force-dynamic";
+
+type Mov = { date: string; s: number };
 
 export default async function Dashboard() {
   const ctx = await requireCtx();
@@ -17,157 +21,189 @@ export default async function Dashboard() {
   const { business, user } = ctx;
   const bid = business.id;
   const { t } = await getT();
-  const sym = business.currency_symbol;
+  const st = getSettings(bid);
+  const sym = business.currency_symbol || "Tk.";
+  const money = makeMoney(sym, st);
+  const today = TODAY();
 
+  // ---- KPIs
   const { receivable, payable } = receivablePayableTotals(bid);
-  const { from, to } = monthRange();
-  const salesM = sumDocuments(bid, "sales_invoice", from, to);
-  const purchaseM = sumDocuments(bid, "purchase_bill", from, to);
-  const expenseM = sumExpenses(bid, from, to);
+  const mFrom = startOfMonth(today), mTo = addDays(addMonths(mFrom, 1), -1);
+  const salesM = sumDocuments(bid, "sales_invoice", mFrom, mTo);
+  const purchaseM = sumDocuments(bid, "purchase_bill", mFrom, mTo);
+  const expenseM = sumExpenses(bid, mFrom, mTo);
 
-  const accts = all<{ id: string; name: string; type: string }>(
-    "SELECT id, name, type FROM accounts WHERE business_id = ? ORDER BY created_at", [bid]
+  // ---- Cashflow: in = payments in + incomes + add-money; out = payments out + expenses + reduce-money (transfers excluded)
+  const since = addMonths(startOfMonth(today), -11);
+  const q = (sql: string) => all<Mov>(sql, [bid, since]);
+  const inRows = [
+    ...q("SELECT substr(date,1,10) date, SUM(amount) s FROM payments WHERE business_id=? AND kind='in' AND date>=? GROUP BY 1"),
+    ...q("SELECT substr(date,1,10) date, SUM(amount) s FROM incomes WHERE business_id=? AND date>=? GROUP BY 1"),
+    ...q("SELECT substr(date,1,10) date, SUM(amount) s FROM account_adjustments WHERE business_id=? AND kind='add' AND date>=? GROUP BY 1"),
+  ];
+  const outRows = [
+    ...q("SELECT substr(date,1,10) date, SUM(amount) s FROM payments WHERE business_id=? AND kind='out' AND date>=? GROUP BY 1"),
+    ...q("SELECT substr(date,1,10) date, SUM(amount) s FROM expenses WHERE business_id=? AND date>=? GROUP BY 1"),
+    ...q("SELECT substr(date,1,10) date, SUM(amount) s FROM account_adjustments WHERE business_id=? AND kind='reduce' AND date>=? GROUP BY 1"),
+  ];
+  const toMap = (rows: Mov[]) => rows.reduce<Record<string, number>>((m, r) => { m[r.date] = (m[r.date] || 0) + r.s; return m; }, {});
+  const inMap = toMap(inRows), outMap = toMap(outRows);
+  const mk = (period: "daily" | "weekly" | "monthly", n: number): CashSeries => {
+    const b = buckets(period, today, n);
+    const i = fill(b, inMap), o = fill(b, outMap);
+    return b.map((x, k) => ({ label: x.label, in: i[k], out: o[k] }));
+  };
+  const series = { daily: mk("daily", 7), weekly: mk("weekly", 8), monthly: mk("monthly", 12) };
+
+  // ---- Accounts
+  const accts = all<{ id: string; name: string; type: string }>("SELECT id, name, type FROM accounts WHERE business_id=? ORDER BY created_at", [bid]);
+  const bal = accountBalances(bid);
+  const totalBal = accts.reduce((a, x) => a + (bal[x.id] || 0), 0);
+
+  // ---- Recent transactions
+  type Tx = { id: string; src: string; kind: string; number: number; date: string; created_at: string; name: string | null; total: number };
+  const recent = all<Tx>(
+    `SELECT * FROM (
+       SELECT d.id, 'doc' src, d.kind, d.number, d.date, d.created_at, p.name, d.total FROM documents d LEFT JOIN parties p ON p.id=d.party_id
+         WHERE d.business_id=? AND d.kind!='quotation'
+       UNION ALL
+       SELECT y.id, 'pay', y.kind, y.number, y.date, y.created_at, p.name, y.amount FROM payments y LEFT JOIN parties p ON p.id=y.party_id
+         WHERE y.business_id=? AND y.is_auto=0
+       UNION ALL
+       SELECT id, 'exp', 'expense', number, date, created_at, category, amount FROM expenses WHERE business_id=?
+       UNION ALL
+       SELECT id, 'inc', 'income', number, date, created_at, category, amount FROM incomes WHERE business_id=?
+     ) ORDER BY date DESC, created_at DESC LIMIT 8`, [bid, bid, bid, bid]
   );
-  const balances = accountBalances(bid);
-  const totalBal = totalCashBank(bid);
-
-  // Cashflow last 7 days
-  const days: { label: string; date: string }[] = [];
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
-    days.push({ date: d.toISOString().slice(0, 10), label: d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) });
+  const docIds = recent.filter((r) => r.src === "doc").map((r) => r.id);
+  const paidMap: Record<string, number> = {};
+  if (docIds.length) {
+    for (const r of all<{ document_id: string; s: number }>(
+      `SELECT document_id, SUM(amount) s FROM payments WHERE document_id IN (${docIds.map(() => "?").join(",")}) GROUP BY document_id`, docIds)) paidMap[r.document_id] = r.s;
   }
-  const inRows = all<{ date: string; s: number }>(
-    "SELECT substr(date,1,10) date, SUM(amount) s FROM payments WHERE business_id=? AND kind='in' AND date >= ? GROUP BY substr(date,1,10)",
-    [bid, days[0].date]
-  );
-  const outRows = all<{ date: string; s: number }>(
-    "SELECT substr(date,1,10) date, SUM(amount) s FROM payments WHERE business_id=? AND kind='out' AND date >= ? GROUP BY substr(date,1,10)",
-    [bid, days[0].date]
-  );
-  const inMap = Object.fromEntries(inRows.map((r) => [r.date, r.s]));
-  const outMap = Object.fromEntries(outRows.map((r) => [r.date, r.s]));
-  const chart = days.map((d) => ({ label: d.label, in: inMap[d.date] || 0, out: outMap[d.date] || 0 }));
-  const totalIn = chart.reduce((a, b) => a + b.in, 0);
-  const totalOut = chart.reduce((a, b) => a + b.out, 0);
+  const txLabel = (r: Tx) =>
+    r.src === "doc" ? docLabel(r.kind, r.number)
+      : r.src === "pay" ? `${r.kind === "in" ? "Payment In" : "Payment Out"} #${r.number}`
+        : r.src === "exp" ? `Expense #${r.number}` : `Income #${r.number}`;
+  const txHref = (r: Tx) => (r.src === "doc" ? `/doc/${r.id}` : r.src === "pay" ? `/receipt/${r.id}` : r.src === "exp" ? "/expense" : "/income");
 
-  const reminders = all<{ id: string; due_date: string; note: string; pname: string }>(
-    `SELECT r.id, r.due_date, r.note, p.name pname FROM reminders r
-     LEFT JOIN parties p ON p.id = r.party_id
-     WHERE r.business_id = ? AND r.done = 0 ORDER BY r.due_date ASC LIMIT 5`, [bid]
+  // ---- Reminders
+  const reminders = all<{ id: string; due_date: string; note: string | null; pname: string | null }>(
+    `SELECT r.id, r.due_date, r.note, p.name pname FROM reminders r LEFT JOIN parties p ON p.id=r.party_id
+     WHERE r.business_id=? AND r.done=0 ORDER BY r.due_date ASC LIMIT 5`, [bid]
   );
+  const remCount = all<{ c: number }>("SELECT COUNT(*) c FROM reminders WHERE business_id=? AND done=0", [bid])[0]?.c ?? 0;
 
-  const topItems = all<{ name: string; amt: number }>(
-    `SELECT di.name, SUM(di.amount) amt FROM doc_items di JOIN documents d ON d.id=di.document_id
-     WHERE d.business_id=? AND d.kind='sales_invoice' AND d.date>=? AND d.date<=?
-     GROUP BY di.name ORDER BY amt DESC LIMIT 5`, [bid, from, to]
-  );
-  const topCustomers = all<{ name: string; amt: number }>(
-    `SELECT p.name, SUM(d.total) amt FROM documents d JOIN parties p ON p.id=d.party_id
-     WHERE d.business_id=? AND d.kind='sales_invoice' AND d.date>=? AND d.date<=?
-     GROUP BY p.id ORDER BY amt DESC LIMIT 5`, [bid, from, to]
-  );
-
-  // Health indicators
-  const cover = payable > 0 ? receivable / payable : receivable > 0 ? 2 : 1;
-  const health = cover >= 1.2 ? "green" : cover >= 0.8 ? "amber" : "red";
-
-  const cards = [
-    { label: t("to_receive"), val: money(receivable, sym), tone: "green", href: "/parties?filter=receivable" },
-    { label: t("to_give"), val: money(payable, sym), tone: "red", href: "/parties?filter=payable" },
-    { label: t("sales_this_month"), val: money(salesM, sym), tone: "green", href: "/sales-invoices" },
-    { label: t("purchase_this_month"), val: money(purchaseM, sym), tone: "blue", href: "/purchase" },
-    { label: t("expense_this_month"), val: money(expenseM, sym), tone: "red", href: "/expense" },
+  const kpis = [
+    { label: t("to_receive"), val: money(receivable), tone: "green", href: "/parties?filter=receivable", icon: "arrowDown" },
+    { label: t("to_give"), val: money(payable), tone: "pink", href: "/parties?filter=payable", icon: "arrowUp" },
+    { label: t("sales_this_month"), val: money(salesM), tone: "", href: "/insights/sales", icon: "tag" },
+    { label: t("purchase_this_month"), val: money(purchaseM), tone: "", href: "/insights/purchase", icon: "cart" },
+    { label: t("expense_this_month"), val: money(expenseM), tone: "", href: "/insights/expense", icon: "wallet" },
   ];
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: ".5rem", marginBottom: "1rem" }}>
-        <h1 style={{ fontSize: "1.6rem", fontWeight: 800 }}>{t("welcome")} {user.name}</h1>
-        <div style={{ display: "flex", gap: ".4rem" }}>
-          <Link href="/pos" className="btn btn-primary">🧮 {t("quick_pos")}</Link>
-          <Link href="/purchase/create" className="btn">+ {t("add_purchase")}</Link>
-        </div>
+      <div className="db-head">
+        <h1>{t("welcome")} {user.name}</h1>
+        <DashActions />
       </div>
 
-      {/* KPI cards */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: ".75rem", marginBottom: "1rem" }}>
-        {cards.map((c) => (
-          <Link key={c.label} href={c.href} className="card" style={{ padding: "1rem", textDecoration: "none",
-            background: c.tone === "green" ? "var(--green-soft)" : c.tone === "red" ? "var(--red-soft)" : "var(--blue-soft)" }}>
-            <div className="text-muted" style={{ fontSize: ".8rem" }}>{c.label}</div>
-            <div style={{ fontSize: "1.3rem", fontWeight: 800, marginTop: ".3rem" }}>{c.val}</div>
+      <div className="db-kpis">
+        {kpis.map((k) => (
+          <Link key={k.label} href={k.href} className={`db-kpi ${k.tone}`}>
+            <div className="l"><span>{k.label}</span><span className="ic"><Icon name={k.icon} size={15} /></span></div>
+            <div className="v">{k.val}</div>
           </Link>
         ))}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: ".75rem", alignItems: "start" }} className="dash-grid">
-        {/* Cashflow */}
-        <div className="card" style={{ padding: "1.1rem" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: ".75rem" }}>
-            <h2 style={{ fontWeight: 700 }}>{t("cashflow")} <span className="text-muted" style={{ fontSize: ".8rem" }}>(Last 7 Days)</span></h2>
-          </div>
-          <CashflowChart data={chart} />
-          <div style={{ display: "flex", gap: "1.5rem", justifyContent: "center", marginTop: ".75rem", fontSize: ".85rem" }}>
-            <span><span style={{ color: "var(--brand)" }}>●</span> {t("total_money_in")}: <b>{money(totalIn, sym)}</b></span>
-            <span><span style={{ color: "var(--red)" }}>●</span> {t("total_money_out")}: <b>{money(totalOut, sym)}</b></span>
+      <div className="db-grid">
+        <div style={{ display: "grid", gap: "1rem", minWidth: 0 }}>
+          <CashflowChart series={series} symbol={sym} hide={st.privacy_mode} />
+
+          <div className="db-card">
+            <div className="db-card-h">
+              <h2>{t("recent_transactions")}</h2>
+              <Link href="/reports/all-transactions" className="link" style={{ fontSize: 13 }}>{t("view_all_transactions")} →</Link>
+            </div>
+            {recent.length === 0 ? (
+              <div className="empty"><Icon name="receipt" size={32} stroke={1.3} /><h3>No transactions yet</h3><div>Create your first sale to see it here.</div></div>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table className="tbl">
+                  <thead><tr><th>Date</th><th>Type</th><th>Name</th><th className="num">Total</th><th className="num">Rec/Paid</th><th className="num">Balance</th></tr></thead>
+                  <tbody>
+                    {recent.map((r) => {
+                      const isDoc = r.src === "doc";
+                      const paid = isDoc ? paidMap[r.id] || 0 : r.total;
+                      const due = isDoc ? Math.max(0, r.total - paid) : 0;
+                      return (
+                        <tr key={r.src + r.id}>
+                          <td style={{ whiteSpace: "nowrap" }}>{fmtDate(r.date)}</td>
+                          <td><Link href={txHref(r)} className="link" style={{ fontWeight: 600 }}>{txLabel(r)}</Link></td>
+                          <td style={{ maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name || (isDoc ? "Cash Sale" : "--")}</td>
+                          <td className="num">{money(r.total)}</td>
+                          <td className="num">{money(paid)}</td>
+                          <td className={`num ${due > 0 ? "neg" : ""}`}>{isDoc ? money(due) : "--"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
 
-        {/* Right column */}
-        <div style={{ display: "flex", flexDirection: "column", gap: ".75rem" }}>
-          <div className="card" style={{ padding: "1.1rem" }}>
-            <div className="text-muted" style={{ fontSize: ".8rem" }}>{t("total_balance")}</div>
-            <div style={{ fontSize: "1.4rem", fontWeight: 800, margin: ".3rem 0 .6rem" }}>{money(totalBal, sym)}</div>
-            {accts.map((a) => (
-              <div key={a.id} style={{ display: "flex", justifyContent: "space-between", fontSize: ".85rem", padding: ".2rem 0" }}>
-                <span className="text-muted">{a.name}</span>
-                <span style={{ fontWeight: 600 }}>{money(balances[a.id] || 0, sym)}</span>
+        <div style={{ display: "grid", gap: "1rem" }}>
+          <div className="db-card">
+            <div className="db-card-h" style={{ alignItems: "flex-start" }}>
+              <div>
+                <div className="text-muted" style={{ fontSize: 12.5 }}>{t("total_balance")}</div>
+                <div style={{ fontSize: 22, fontWeight: 800, marginTop: 4 }}>{money(totalBal)}</div>
               </div>
-            ))}
-          </div>
-
-          <div className="card" style={{ padding: "1.1rem" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: ".5rem" }}>
-              <span style={{ width: 10, height: 10, borderRadius: 999, background: health === "green" ? "var(--brand)" : health === "amber" ? "#f59e0b" : "var(--red)" }} />
-              <b>{t("business_health")}</b>
+              <Link href="/accounts" className="btn btn-sm btn-soft" style={{ width: "auto" }}>View</Link>
             </div>
-            <p className="text-muted" style={{ fontSize: ".82rem", marginTop: ".4rem" }}>
-              Receivable vs payable cover: <b style={{ color: "var(--text)" }}>{cover.toFixed(2)}×</b>
-            </p>
+            <div style={{ padding: ".25rem 1rem .5rem" }}>
+              {accts.map((a) => (
+                <Link key={a.id} href={`/accounts/${a.id}`} className="db-acc">
+                  <span className={`acc-ic ${a.type}`}><Icon name={a.type === "bank" ? "bank" : a.type === "wallet" ? "wallet" : "cash"} size={15} /></span>
+                  <span style={{ flex: 1, fontWeight: 500 }}>{a.name}</span>
+                  <b className={(bal[a.id] || 0) < 0 ? "neg" : ""}>{money(bal[a.id] || 0)}</b>
+                </Link>
+              ))}
+              {accts.length === 0 && <div className="text-muted" style={{ padding: ".75rem 0" }}>No accounts yet.</div>}
+            </div>
           </div>
 
-          <div className="card" style={{ padding: "1.1rem" }}>
-            <h3 style={{ fontWeight: 700, marginBottom: ".5rem" }}>Top Items (this month)</h3>
-            {topItems.length === 0 ? <p className="text-muted" style={{ fontSize: ".85rem" }}>No sales yet.</p> : topItems.map((it) => (
-              <div key={it.name} style={{ display: "flex", justifyContent: "space-between", fontSize: ".85rem", padding: ".2rem 0" }}>
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 150 }}>{it.name}</span>
-                <span style={{ fontWeight: 600 }}>{money(it.amt, sym)}</span>
-              </div>
-            ))}
-          </div>
-
-          <div className="card" style={{ padding: "1.1rem" }}>
-            <h3 style={{ fontWeight: 700, marginBottom: ".5rem" }}>Top Customers (this month)</h3>
-            {topCustomers.length === 0 ? <p className="text-muted" style={{ fontSize: ".85rem" }}>No sales yet.</p> : topCustomers.map((c) => (
-              <div key={c.name} style={{ display: "flex", justifyContent: "space-between", fontSize: ".85rem", padding: ".2rem 0" }}>
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 150 }}>{c.name}</span>
-                <span style={{ fontWeight: 600 }}>{money(c.amt, sym)}</span>
-              </div>
-            ))}
-          </div>
-
-          <div className="card" style={{ padding: "1.1rem" }}>
-            <h3 style={{ fontWeight: 700, marginBottom: ".5rem" }}>{t("upcoming_reminders")} ({reminders.length})</h3>
+          <div className="db-card">
+            <div className="db-card-h">
+              <h2>{t("upcoming_reminders")} ({remCount})</h2>
+              <Link href="/reminders" className="link" style={{ fontSize: 12.5 }}>View all</Link>
+            </div>
             {reminders.length === 0 ? (
-              <p className="text-muted" style={{ fontSize: ".85rem" }}>No reminders yet.</p>
-            ) : reminders.map((r) => (
-              <div key={r.id} style={{ display: "flex", justifyContent: "space-between", fontSize: ".85rem", padding: ".25rem 0" }}>
-                <span>{r.pname || "—"}</span>
-                <span className="text-muted">{r.due_date}</span>
+              <div className="empty" style={{ padding: "1.6rem 1rem" }}>
+                <div style={{ width: 60, height: 60, borderRadius: 14, background: "var(--hover)", display: "grid", placeItems: "center", color: "var(--faint)" }}><Icon name="reminder" size={30} stroke={1.3} /></div>
+                <h3 style={{ fontSize: 14 }}>{t("no_reminders")}</h3>
+                <div style={{ fontSize: 12.5 }}>Set reminders to collect dues on time.</div>
+                <Link href="/reminders?new=1" className="btn btn-primary btn-sm" style={{ marginTop: ".5rem" }}><Icon name="plus" size={14} />{t("add_new_reminder")}</Link>
               </div>
-            ))}
+            ) : (
+              <div style={{ padding: ".25rem 1rem .75rem" }}>
+                {reminders.map((r) => (
+                  <div key={r.id} className="db-acc">
+                    <span className="acc-ic bank"><Icon name="reminder" size={15} /></span>
+                    <span style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.pname || r.note || "Reminder"}</div>
+                      {r.pname && r.note && <div className="sub">{r.note}</div>}
+                    </span>
+                    <span className={`sub ${r.due_date < today ? "neg" : ""}`} style={{ whiteSpace: "nowrap" }}>{fmtDate(r.due_date)}</span>
+                  </div>
+                ))}
+                <Link href="/reminders?new=1" className="btn btn-sm" style={{ marginTop: ".6rem", width: "100%" }}><Icon name="plus" size={14} />{t("add_new_reminder")}</Link>
+              </div>
+            )}
           </div>
         </div>
       </div>

@@ -1,104 +1,55 @@
-import { requireCtx } from "@/lib/auth";
 import { redirect, notFound } from "next/navigation";
-import { all, get } from "@/lib/db";
-import { docPaid } from "@/lib/domain";
-import { money } from "@/lib/util";
-import { getSettings } from "@/lib/settings";
-import DocToolbar from "./DocToolbar";
+import { requireCtx } from "@/lib/auth";
+import { all } from "@/lib/db";
+import InvoiceDocument, { ThermalInvoice, DOC_NAME } from "@/components/InvoiceDocument";
+import { PrintStage } from "@/components/PrintBar";
+import { loadInvoice, paymentPickers } from "../load";
+import DocBar from "./DocBar";
 
 export const dynamic = "force-dynamic";
 
-const TITLE: Record<string, string> = {
-  sales_invoice: "SALES INVOICE", purchase_bill: "PURCHASE BILL", quotation: "QUOTATION",
-  sales_return: "SALES RETURN", purchase_return: "PURCHASE RETURN",
+const LIST: Record<string, string> = {
+  sales_invoice: "/sales-invoices", purchase_bill: "/purchase", quotation: "/quotations",
+  sales_return: "/sales-return", purchase_return: "/purchase-return",
 };
 
-export default async function DocView({ params }: { params: Promise<{ id: string }> }) {
+export default async function DocPreview({ params, searchParams }: {
+  params: Promise<{ id: string }>; searchParams: Promise<Record<string, string | undefined>>;
+}) {
   const { id } = await params;
+  const sp = await searchParams;
   const ctx = await requireCtx();
   if (!ctx) redirect("/login");
   const bid = ctx.business.id;
-  const sym = ctx.business.currency_symbol;
+  const loaded = loadInvoice(bid, id);
+  if (!loaded) notFound();
+  const { data, settings, letterhead, partyId, partyPhone } = loaded;
 
-  const doc = get<{ id: string; kind: string; number: number; date: string; notes: string | null; subtotal: number; discount_total: number; tax_total: number; total: number; status: string; payment_mode: string | null; party_id: string | null }>(
-    "SELECT * FROM documents WHERE id = ? AND business_id = ?", [id, bid]
-  );
-  if (!doc) notFound();
-  const party = doc.party_id ? get<{ name: string; phone: string | null; address: string | null }>("SELECT name, phone, address FROM parties WHERE id = ?", [doc.party_id]) : null;
-  const lines = all<{ name: string; qty: number; rate: number; discount_value: number; discount_type: string; tax_rate: number; amount: number }>(
-    "SELECT name, qty, rate, discount_value, discount_type, tax_rate, amount FROM doc_items WHERE document_id = ?", [id]
-  );
-  const paid = docPaid(id);
-  const due = Math.max(0, doc.total - paid);
-  const settings = getSettings(bid);
+  const thermal = sp.thermal === "1" || (settings.print_type === "thermal" && sp.regular !== "1");
+  const pageCss = thermal
+    ? `@page { size: ${settings.thermal_width === 58 ? 58 : 80}mm auto; margin: 0; }`
+    : `@page { size: ${settings.page_size === "A5" ? "A5" : "A4"}; margin: 10mm; }`;
+  const name = DOC_NAME[data.kind] || "Invoice";
+  const fileName = `${name.replace(/ /g, "-")}-${data.number}${data.party ? "-" + data.party.name.replace(/[^\p{L}\p{N}]+/gu, "-") : ""}`;
+  const { parties, accounts } = paymentPickers(bid);
+  const next = all<{ kind: string; value: number }>("SELECT kind, value FROM counters WHERE business_id=?", [bid]);
+  const nextOf = (k: string) => (next.find((c) => c.kind === k)?.value ?? 0) + 1;
+  const due = Math.max(0, Math.round((data.total - data.received) * 100) / 100);
+  const summary = `${ctx.business.name}\n${name} #${data.number} · ${data.date}\n` +
+    data.lines.map((l) => `• ${l.name} × ${l.qty} = Tk. ${l.amount.toLocaleString("en-US")}`).join("\n") +
+    (data.charges.length ? "\n" + data.charges.map((c) => `${c.title}: Tk. ${c.amount.toLocaleString("en-US")}`).join("\n") : "") +
+    `\nTotal: Tk. ${data.total.toLocaleString("en-US")}` + (due > 0 ? `\nDue: Tk. ${due.toLocaleString("en-US")}` : "") + `\nThank you!`;
 
   return (
     <div>
-      <DocToolbar id={doc.id} kind={doc.kind} />
-      <div className="card print-area" style={{ padding: "2rem", maxWidth: 760, margin: "0 auto" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", borderBottom: "2px solid var(--brand)", paddingBottom: "1rem" }}>
-          <div style={{ display: "flex", gap: ".75rem", alignItems: "center" }}>
-            {settings.show_logo && ctx.business.logo && (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={ctx.business.logo} alt="logo" style={{ height: 52, borderRadius: 8 }} />
-            )}
-            <div>
-            <div style={{ fontSize: "1.5rem", fontWeight: 800, color: "var(--brand)" }}>{ctx.business.name}</div>
-            {ctx.business.address && <div className="text-muted" style={{ fontSize: ".85rem" }}>{ctx.business.address}</div>}
-            {ctx.business.phone && <div className="text-muted" style={{ fontSize: ".85rem" }}>{ctx.business.phone}</div>}
-            </div>
-          </div>
-          <div style={{ textAlign: "right" }}>
-            <div style={{ fontWeight: 800, letterSpacing: ".05em" }}>{TITLE[doc.kind]}</div>
-            <div className="text-muted" style={{ fontSize: ".85rem" }}>#{doc.number}</div>
-            <div className="text-muted" style={{ fontSize: ".85rem" }}>{doc.date}</div>
-          </div>
-        </div>
-
-        <div style={{ margin: "1rem 0", fontSize: ".9rem" }}>
-          <div className="text-muted">Bill To:</div>
-          <div style={{ fontWeight: 700 }}>{party?.name || "Cash Sale"}</div>
-          {party?.phone && <div className="text-muted">{party.phone}</div>}
-          {party?.address && <div className="text-muted">{party.address}</div>}
-        </div>
-
-        <table className="tbl" style={{ marginTop: ".5rem" }}>
-          <thead><tr><th>Item</th><th style={{ textAlign: "right" }}>Qty</th><th style={{ textAlign: "right" }}>Rate</th><th style={{ textAlign: "right" }}>Disc</th><th style={{ textAlign: "right" }}>Amount</th></tr></thead>
-          <tbody>
-            {lines.map((l, i) => (
-              <tr key={i}>
-                <td>{l.name}</td>
-                <td style={{ textAlign: "right" }}>{l.qty}</td>
-                <td style={{ textAlign: "right" }}>{money(l.rate, sym)}</td>
-                <td style={{ textAlign: "right" }}>{l.discount_type === "percent" ? `${l.discount_value}%` : money(l.discount_value, sym)}</td>
-                <td style={{ textAlign: "right", fontWeight: 600 }}>{money(l.amount, sym)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-
-        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "1rem" }}>
-          <div style={{ width: 280, display: "grid", gap: ".3rem", fontSize: ".9rem" }}>
-            <Row l="Sub Total" v={money(doc.subtotal, sym)} />
-            <Row l="Discount" v={"− " + money(doc.discount_total, sym)} />
-            <Row l="Tax" v={money(doc.tax_total, sym)} />
-            <Row l="Total" v={money(doc.total, sym)} bold />
-            {doc.kind !== "quotation" && <><Row l="Paid" v={money(paid, sym)} /><Row l="Due" v={money(due, sym)} bold /></>}
-          </div>
-        </div>
-
-        {doc.notes && <div style={{ marginTop: "1.5rem", fontSize: ".85rem" }}><b>Notes:</b> {doc.notes}</div>}
-        {settings.invoice_footer && <div style={{ marginTop: "1.5rem", fontSize: ".85rem", textAlign: "center" }}>{settings.invoice_footer}</div>}
-        <div className="text-muted" style={{ marginTop: ".75rem", fontSize: ".75rem", textAlign: "center" }}>Generated by Hishab</div>
-      </div>
-    </div>
-  );
-}
-
-function Row({ l, v, bold }: { l: string; v: string; bold?: boolean }) {
-  return (
-    <div style={{ display: "flex", justifyContent: "space-between", fontWeight: bold ? 800 : 400, borderTop: bold ? "1px solid var(--border)" : undefined, paddingTop: bold ? ".2rem" : 0 }}>
-      <span className={bold ? "" : "text-muted"}>{l}</span><span>{v}</span>
+      <DocBar
+        id={id} kind={data.kind} title={`${name} #${data.number}`} backHref={LIST[data.kind] || "/sales-invoices"}
+        fileName={fileName} thermal={thermal} partyId={partyId} partyPhone={partyPhone} due={due}
+        parties={parties} accounts={accounts} nextIn={nextOf("payment_in")} nextOut={nextOf("payment_out")} summary={summary}
+      />
+      <PrintStage pageCss={pageCss}>
+        {thermal ? <ThermalInvoice data={data} lh={letterhead} settings={settings} /> : <InvoiceDocument data={data} lh={letterhead} settings={settings} />}
+      </PrintStage>
     </div>
   );
 }

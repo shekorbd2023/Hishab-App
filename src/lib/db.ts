@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import fs from "node:fs";
-import { SCHEMA_SQL } from "./schema";
+import { SCHEMA_SQL, MIGRATIONS } from "./schema";
 
 // ---- Build-safe DB (ship-app skill gotcha #1) --------------------------------
 // `next build` spawns many worker processes that each import this module and open
@@ -29,6 +29,15 @@ function connect(): DatabaseSync {
     }
   }
   db.exec("PRAGMA foreign_keys = ON");
+  // Migrate older databases BEFORE running the schema (new indexes reference new columns).
+  for (const [table, col, ddl] of MIGRATIONS) {
+    try {
+      const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+      if (cols.length > 0 && !cols.some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${ddl}`);
+    } catch {
+      /* ignore */
+    }
+  }
   db.exec(SCHEMA_SQL);
   return db;
 }
