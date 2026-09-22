@@ -1,19 +1,18 @@
-import { requireCtx } from "@/lib/auth";
 import { redirect } from "next/navigation";
-import { all } from "@/lib/db";
-import { accountBalances, totalCashBank } from "@/lib/domain";
-import AccountsManager from "./AccountsManager";
+import { requireCtx } from "@/lib/auth";
+import { Empty } from "@/components/ui";
+import { loadAccounts } from "./data";
 
 export const dynamic = "force-dynamic";
 
-export default async function AccountsPage() {
+export default async function AccountsIndex() {
   const ctx = await requireCtx();
   if (!ctx) redirect("/login");
-  const bid = ctx.business.id;
-  const accts = all<{ id: string; name: string; type: string; opening_balance: number }>(
-    "SELECT * FROM accounts WHERE business_id = ? ORDER BY created_at", [bid]
+  const first = loadAccounts(ctx.business.id)[0];
+  if (first) redirect(`/accounts/${first.id}`);
+  return (
+    <div className="md-empty-pane">
+      <Empty icon="bank" title="No accounts yet" text="Add your cash box, bank accounts and mobile wallets (bKash, Nagad…)." />
+    </div>
   );
-  const bal = accountBalances(bid);
-  const withBal = accts.map((a) => ({ ...a, balance: bal[a.id] ?? 0 }));
-  return <AccountsManager accounts={withBal} total={totalCashBank(bid)} symbol={ctx.business.currency_symbol} />;
 }

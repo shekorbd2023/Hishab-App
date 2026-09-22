@@ -123,9 +123,7 @@ export const SETTINGS_DEFAULTS: BizSettings = {
   bank_account_text: "",
 };
 
-export const INVOICE_COLORS = [
-  "#1f9d6f", "#e5484d", "#0b84ff", "#f76b15", "#0aa2c0", "#0f7a4a", "#c2298a", "#d4a100", "#6e56cf", "#16233b",
-];
+export { INVOICE_COLORS } from "./invoice-colors";
 
 export function getSettings(businessId: string): BizSettings {
   const row = get<{ json: string | null }>("SELECT json FROM settings WHERE business_id = ?", [businessId]);

@@ -1,7 +1,7 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import PrintBar from "@/components/PrintBar";
+import PrintBar, { printPaper } from "@/components/PrintBar";
 import PaymentDialog, { type PayAccount, type PayParty } from "@/components/PaymentDialog";
 import { Dropdown, Icon, Modal, post, useToast, type MenuItem } from "@/components/ui";
 
@@ -23,6 +23,15 @@ export default function DocBar({
   const [paying, setPaying] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [busy, setBusy] = useState(false);
+  // "Save & Print" from the editor / POS lands here with ?print=1 — open the print dialog once.
+  useEffect(() => {
+    const u = new URL(window.location.href);
+    if (u.searchParams.get("print") !== "1") return;
+    u.searchParams.delete("print");
+    window.history.replaceState(null, "", u.pathname + (u.search || ""));
+    const t = setTimeout(() => printPaper(fileName), 600);
+    return () => clearTimeout(t);
+  }, [fileName]);
   const payKind: "in" | "out" = kind === "sales_invoice" || kind === "purchase_return" ? "in" : "out";
 
   async function act(body: Record<string, unknown>) {

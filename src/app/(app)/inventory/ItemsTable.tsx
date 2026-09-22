@@ -1,185 +1,172 @@
 "use client";
+// Karbar "Items List (n)": search + All Categories / All Stock / All Items filters + Sort By, clickable rows → item detail.
 import { useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useT } from "@/components/Providers";
-import { Modal, PageHeader } from "@/components/Modal";
-import { api, downloadCsv } from "@/lib/clientUtil";
+import { Avatar, FilterSelect, Icon, Modal, MoreButton, SearchBox, SortMenu, SplitButton, post, useToast } from "@/components/ui";
+import { downloadCsv } from "@/lib/clientUtil";
+import { tk, qty as fq } from "@/lib/format";
+import StockDialog from "./StockDialog";
+import type { ItemRow } from "./data";
 
-type Item = {
-  id: string; name: string; category: string | null; type: string; code: string | null;
-  sales_price: number; purchase_price: number; mrp_price: number; wholesale_price: number;
-  min_wholesale_qty: number; unit: string | null; opening_stock: number; low_stock_alert: number; stock: number;
-};
+const stateOf = (it: ItemRow) => it.type === "Service" ? "in" : it.stock <= 0 ? "out" : it.low_stock_alert > 0 && it.stock <= it.low_stock_alert ? "low" : "in";
 
-const m = (n: number, s: string) => `${s} ${(n || 0).toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
-
-export default function ItemsTable({ items, symbol }: { items: Item[]; symbol: string }) {
-  const { t } = useT();
+export default function ItemsTable({ items, categories }: { items: ItemRow[]; categories: string[] }) {
   const router = useRouter();
+  const { toast, node } = useToast();
   const [q, setQ] = useState("");
-  const [stockFilter, setStockFilter] = useState<"all" | "low">("all");
   const [cat, setCat] = useState("all");
-  const [editing, setEditing] = useState<Item | null>(null);
-  const [showForm, setShowForm] = useState(false);
-  const [adjust, setAdjust] = useState<Item | null>(null);
+  const [stock, setStock] = useState("all");
+  const [type, setType] = useState("all");
+  const [sort, setSort] = useState("name_az");
+  const [adjust, setAdjust] = useState<{ it: ItemRow; mode: "add" | "reduce" } | null>(null);
+  const [del, setDel] = useState<ItemRow | null>(null);
+  const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const cats = useMemo(() => Array.from(new Set(items.map((i) => i.category).filter(Boolean))) as string[], [items]);
-  const rows = useMemo(() => items.filter((it) => {
-    if (q && !it.name.toLowerCase().includes(q.toLowerCase()) && !(it.code || "").includes(q)) return false;
-    if (cat !== "all" && it.category !== cat) return false;
-    if (stockFilter === "low" && !(it.stock <= it.low_stock_alert)) return false;
-    return true;
-  }), [items, q, cat, stockFilter]);
+  const rows = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    const list = items.filter((it) => {
+      if (s && !it.name.toLowerCase().includes(s) && !(it.code || "").toLowerCase().includes(s)) return false;
+      if (cat !== "all" && (it.category || "") !== cat) return false;
+      if (type !== "all" && it.type !== type) return false;
+      if (stock !== "all" && stateOf(it) !== stock) return false;
+      return true;
+    });
+    const by: Record<string, (a: ItemRow, b: ItemRow) => number> = {
+      latest: (a, b) => (a.created_at < b.created_at ? 1 : -1),
+      qty_desc: (a, b) => b.stock - a.stock,
+      qty_asc: (a, b) => a.stock - b.stock,
+      name_az: (a, b) => a.name.localeCompare(b.name),
+      name_za: (a, b) => b.name.localeCompare(a.name),
+    };
+    return [...list].sort(by[sort] || by.name_az);
+  }, [items, q, cat, stock, type, sort]);
+
+  const value = useMemo(() => rows.reduce((a, it) => a + Math.max(0, it.stock) * it.purchase_price, 0), [rows]);
+  const low = useMemo(() => items.filter((it) => stateOf(it) !== "in").length, [items]);
 
   function exportCsv() {
     downloadCsv("items.csv",
-      ["name", "category", "type", "code", "sales_price", "purchase_price", "mrp_price", "wholesale_price", "min_wholesale_qty", "unit", "opening_stock", "low_stock_alert", "current_stock"],
-      rows.map((i) => [i.name, i.category, i.type, i.code, i.sales_price, i.purchase_price, i.mrp_price, i.wholesale_price, i.min_wholesale_qty, i.unit, i.opening_stock, i.low_stock_alert, i.stock]));
+      ["name", "category", "type", "code", "sales_price", "purchase_price", "mrp_price", "wholesale_price", "unit", "current_stock"],
+      rows.map((i) => [i.name, i.category, i.type, i.code, i.sales_price, i.purchase_price, i.mrp_price, i.wholesale_price, i.unit, i.stock]));
   }
   async function onImport(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]; if (!file) return;
-    const csv = await file.text();
-    const { ok, data } = await api("/api/items", { op: "import", csv });
-    if (ok) { alert(`Imported ${data.count} items`); router.refresh(); } else alert((data.error as string) || "Import failed");
+    const { ok, data } = await post<{ count: number }>("/api/items", { op: "import", csv: await file.text() });
+    toast(ok ? `Imported ${data.count} items` : data.error || "Import failed");
+    if (ok) router.refresh();
     if (fileRef.current) fileRef.current.value = "";
+  }
+  async function remove() {
+    if (!del) return;
+    setBusy(true);
+    const { ok, data } = await post("/api/items", { op: "delete", id: del.id });
+    setBusy(false);
+    if (!ok) { toast(data.error || "Could not delete"); return; }
+    setDel(null); toast("Item deleted"); router.refresh();
   }
 
   return (
     <div>
-      <PageHeader title={t("inventory")} count={items.length}>
-        <Link className="btn" href="/inventory/labels">🏷️ Barcode labels</Link>
-        <button className="btn" onClick={exportCsv}>⬇ {t("export_csv")}</button>
-        <button className="btn" onClick={() => fileRef.current?.click()}>⬆ {t("import_csv")}</button>
-        <input ref={fileRef} type="file" accept=".csv" hidden onChange={onImport} />
-        <button className="btn btn-primary" onClick={() => { setEditing(null); setShowForm(true); }}>+ {t("add_item")}</button>
-      </PageHeader>
-
-      <div className="card" style={{ padding: "1rem" }}>
-        <div style={{ display: "flex", gap: ".5rem", flexWrap: "wrap", marginBottom: ".75rem" }}>
-          <input className="input" placeholder={`${t("search")}…`} value={q} onChange={(e) => setQ(e.target.value)} style={{ maxWidth: 260 }} />
-          <select className="input" value={cat} onChange={(e) => setCat(e.target.value)} style={{ maxWidth: 200 }}>
-            <option value="all">{t("all")} {t("category")}</option>
-            {cats.map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
-          <select className="input" value={stockFilter} onChange={(e) => setStockFilter(e.target.value as "all" | "low")} style={{ maxWidth: 160 }}>
-            <option value="all">{t("all")}</option>
-            <option value="low">{t("low_stock")}</option>
-          </select>
+      <div className="page-head">
+        <div className="page-title">
+          Items List ({items.length})
+          <Link href="/settings/features/inventory" className="btn btn-icon btn-sm btn-ghost" title="Inventory settings"><Icon name="settings" size={16} /></Link>
         </div>
-        <div style={{ overflowX: "auto" }} className="scroll-thin">
-          <table className="tbl">
-            <thead><tr>
-              <th>{t("item_name")}</th><th>{t("category")}</th><th style={{ textAlign: "right" }}>{t("sales_price")}</th>
-              <th style={{ textAlign: "right" }}>{t("purchase_price")}</th><th style={{ textAlign: "right" }}>{t("quantity")}</th><th></th>
-            </tr></thead>
-            <tbody>
-              {rows.map((it) => (
-                <tr key={it.id}>
-                  <td>{it.name}{it.code && <span className="text-muted" style={{ fontSize: ".75rem" }}> · {it.code}</span>}</td>
-                  <td className="text-muted">{it.category || "—"}</td>
-                  <td style={{ textAlign: "right" }}>{m(it.sales_price, symbol)}</td>
-                  <td style={{ textAlign: "right" }}>{m(it.purchase_price, symbol)}</td>
-                  <td style={{ textAlign: "right", color: it.stock <= it.low_stock_alert ? "var(--red)" : "inherit", fontWeight: 600 }}>
-                    {it.stock} {it.unit}
+        <div className="row" style={{ gap: ".5rem" }}>
+          <Link className="btn" href="/tools/barcode"><Icon name="barcode" size={15} />Barcode</Link>
+          <button className="btn" onClick={exportCsv}><Icon name="download" size={15} />Download</button>
+          <Link className="btn" href="/import/items"><Icon name="import" size={15} />Import Items</Link>
+          <input ref={fileRef} type="file" accept=".csv" hidden onChange={onImport} />
+          <SplitButton label="Add New Item" icon="plus" href="/inventory/add"
+            items={[{ label: "Import Items (Excel)", icon: "import", href: "/import/items" }, { label: "Import CSV", icon: "upload", onClick: () => fileRef.current?.click() }]} />
+        </div>
+      </div>
+
+      <div className="md-strip">
+        <span>Items<b>{rows.length}</b></span>
+        <span>Stock Value<b>{tk(Math.round(value))}</b></span>
+        <span>Low / Out of Stock<b className={low ? "neg" : ""}>{low}</b></span>
+      </div>
+
+      <div className="toolbar">
+        <SearchBox value={q} onChange={setQ} placeholder="Search items…" width={260} />
+        <FilterSelect value={cat} onChange={setCat} options={[{ v: "all", l: "All Categories" }, ...categories.map((c) => ({ v: c, l: c }))]} />
+        <FilterSelect value={stock} onChange={setStock} options={[{ v: "all", l: "All Stock" }, { v: "in", l: "In Stock" }, { v: "low", l: "Low Stock" }, { v: "out", l: "Out of Stock" }]} />
+        <FilterSelect value={type} onChange={setType} options={[{ v: "all", l: "All Items" }, { v: "Product", l: "Product" }, { v: "Service", l: "Service" }]} />
+        <div className="grow" />
+        <SortMenu value={sort} onChange={setSort} options={[
+          { v: "latest", l: "Latest" }, { v: "qty_desc", l: "Quantity: High to Low" }, { v: "qty_asc", l: "Quantity: Low to High" },
+          { v: "name_az", l: "Name: A to Z" }, { v: "name_za", l: "Name: Z to A" },
+        ]} />
+      </div>
+
+      <div className="table-wrap">
+        <table className="tbl">
+          <thead>
+            <tr>
+              <th>Item Name</th><th>Type</th><th>Category</th><th>Item Code</th>
+              <th className="num">Sales Price</th><th className="num">Purchase Price</th><th className="num">Quantity</th>
+              <th style={{ width: 56 }} />
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((it) => {
+              const st = stateOf(it);
+              return (
+                <tr key={it.id} className="clickable" onClick={() => router.push(`/inventory/${it.id}`)}>
+                  <td>
+                    <div className="row" style={{ gap: ".6rem" }}>
+                      <Avatar name={it.name} img={it.image} soft />
+                      <b style={{ fontWeight: 600 }}>{it.name}</b>
+                    </div>
                   </td>
-                  <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
-                    <button className="btn" style={{ padding: ".25rem .5rem" }} title="Adjust stock" onClick={() => setAdjust(it)}>±</button>
-                    <button className="btn" style={{ padding: ".25rem .5rem", marginLeft: 4 }} onClick={() => { setEditing(it); setShowForm(true); }}>✎</button>
+                  <td>{it.type}</td>
+                  <td>{it.category || <span className="text-muted">--</span>}</td>
+                  <td>{it.code || <span className="text-muted">--</span>}</td>
+                  <td className="num">{tk(it.sales_price)}</td>
+                  <td className="num">{tk(it.purchase_price)}</td>
+                  <td className="num" style={{ fontWeight: 600 }}>
+                    {it.type === "Service" ? <span className="text-muted">--</span> : (
+                      <span className={st === "out" ? "neg" : st === "low" ? "amber" : ""}>{fq(it.stock)} {(it.unit || "pcs").toUpperCase()}</span>
+                    )}
+                  </td>
+                  <td onClick={(e) => e.stopPropagation()}>
+                    <MoreButton items={[
+                      { heading: "Adjust Stock" },
+                      { label: "Add Stock", icon: "plus", onClick: () => setAdjust({ it, mode: "add" }) },
+                      { label: "Reduce Stock", icon: "minus", onClick: () => setAdjust({ it, mode: "reduce" }) },
+                      { sep: true },
+                      { heading: "Actions" },
+                      { label: "Edit Item", icon: "edit", href: `/inventory/${it.id}/edit` },
+                      { label: "Delete Item", icon: "trash", danger: true, onClick: () => setDel(it) },
+                    ]} />
                   </td>
                 </tr>
-              ))}
-              {rows.length === 0 && <tr><td colSpan={6} className="text-muted" style={{ textAlign: "center", padding: "2rem" }}>{t("no_data")}</td></tr>}
-            </tbody>
-          </table>
-        </div>
+              );
+            })}
+            {rows.length === 0 && (
+              <tr><td colSpan={8}><div className="empty"><h3>No items found</h3><div>Try a different search or filter.</div>
+                <Link href="/inventory/add" className="btn btn-primary" style={{ marginTop: ".5rem" }}><Icon name="plus" size={15} />Add New Item</Link></div></td></tr>
+            )}
+          </tbody>
+        </table>
       </div>
 
-      {showForm && <ItemForm item={editing} onClose={() => setShowForm(false)} onSaved={() => { setShowForm(false); router.refresh(); }} />}
-      {adjust && <AdjustModal item={adjust} symbol={symbol} onClose={() => setAdjust(null)} onSaved={() => { setAdjust(null); router.refresh(); }} />}
+      {adjust && <StockDialog item={adjust.it} mode={adjust.mode} onClose={() => setAdjust(null)} onDone={() => { setAdjust(null); toast("Stock updated"); router.refresh(); }} />}
+      {del && (
+        <Modal title="Delete Item" onClose={() => !busy && setDel(null)} width={420} footer={
+          <>
+            <button className="btn" onClick={() => setDel(null)} disabled={busy}>Cancel</button>
+            <button className="btn btn-primary dl-del" onClick={remove} disabled={busy}><Icon name="trash" size={14} />{busy ? "Deleting…" : "Delete"}</button>
+          </>
+        }>
+          <div>Are you sure you want to delete <b>{del.name}</b>?</div>
+          <div className="sub">Old invoices keep the item name, but it will no longer appear in lists or stock reports.</div>
+        </Modal>
+      )}
+      {node}
     </div>
-  );
-}
-
-function AdjustModal({ item, symbol, onClose, onSaved }: { item: Item; symbol: string; onClose: () => void; onSaved: () => void }) {
-  const { t } = useT();
-  const [qty, setQty] = useState(0);
-  const [dir, setDir] = useState<"in" | "out">("in");
-  const [reason, setReason] = useState("");
-  async function save() {
-    const delta = dir === "in" ? Math.abs(qty) : -Math.abs(qty);
-    if (!delta) return;
-    const { ok, data } = await api("/api/items", { op: "adjust", id: item.id, qty_delta: delta, reason });
-    if (ok) onSaved(); else alert((data.error as string) || "Failed");
-  }
-  return (
-    <Modal title={`Adjust stock — ${item.name}`} onClose={onClose}>
-      <div style={{ display: "grid", gap: ".6rem" }}>
-        <p className="text-muted" style={{ fontSize: ".82rem" }}>Current stock: <b>{item.stock} {item.unit}</b> {symbol ? "" : ""}</p>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: ".6rem" }}>
-          <div><label className="label">Direction</label>
-            <select className="input" value={dir} onChange={(e) => setDir(e.target.value as "in" | "out")}>
-              <option value="in">Stock In (+)</option><option value="out">Stock Out (−)</option>
-            </select>
-          </div>
-          <div><label className="label">{t("quantity")}</label><input className="input" type="number" value={qty} onChange={(e) => setQty(Number(e.target.value))} /></div>
-        </div>
-        <div><label className="label">Reason</label><input className="input" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. damage, correction, opening" /></div>
-        <div style={{ display: "flex", gap: ".5rem", marginTop: ".3rem" }}><button className="btn btn-primary" onClick={save}>{t("save")}</button><button className="btn" onClick={onClose}>{t("cancel")}</button></div>
-      </div>
-    </Modal>
-  );
-}
-
-function ItemForm({ item, onClose, onSaved }: { item: Item | null; onClose: () => void; onSaved: () => void }) {
-  const { t } = useT();
-  const [f, setF] = useState({
-    name: item?.name || "", category: item?.category || "", type: item?.type || "Product", code: item?.code || "",
-    sales_price: item?.sales_price ?? 0, purchase_price: item?.purchase_price ?? 0, mrp_price: item?.mrp_price ?? 0,
-    wholesale_price: item?.wholesale_price ?? 0, min_wholesale_qty: item?.min_wholesale_qty ?? 0,
-    unit: item?.unit || "pcs", opening_stock: item?.opening_stock ?? 0, low_stock_alert: item?.low_stock_alert ?? 0,
-  });
-  const [busy, setBusy] = useState(false);
-  const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setF({ ...f, [k]: e.target.value });
-  const field = (k: keyof typeof f, label: string, type = "text") => (
-    <div><label className="label">{label}</label><input className="input" type={type} value={f[k] as string | number} onChange={set(k)} /></div>
-  );
-
-  async function save() {
-    if (!f.name.trim()) return;
-    setBusy(true);
-    const { ok, data } = await api("/api/items", item ? { op: "update", id: item.id, ...f } : { op: "create", ...f });
-    setBusy(false);
-    if (ok) onSaved(); else alert((data.error as string) || "Failed");
-  }
-  async function del() {
-    if (!item || !confirm("Delete this item?")) return;
-    const { ok } = await api("/api/items", { op: "delete", id: item.id });
-    if (ok) onSaved();
-  }
-
-  return (
-    <Modal title={item ? `${t("edit")} ${t("item_name")}` : t("add_item")} onClose={onClose} wide>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: ".6rem" }}>
-        {field("name", `${t("item_name")} *`)}
-        <div><label className="label">{t("type")}</label><select className="input" value={f.type} onChange={set("type")}><option>Product</option><option>Service</option></select></div>
-        {field("category", t("category"))}
-        {field("code", t("item_code"))}
-        {field("sales_price", t("sales_price"), "number")}
-        {field("purchase_price", t("purchase_price"), "number")}
-        {field("mrp_price", t("mrp_price"), "number")}
-        {field("wholesale_price", t("wholesale_price"), "number")}
-        {field("min_wholesale_qty", t("min_wholesale_qty"), "number")}
-        {field("unit", t("unit"))}
-        {field("opening_stock", t("opening_stock"), "number")}
-        {field("low_stock_alert", t("low_stock_alert"), "number")}
-      </div>
-      <div style={{ display: "flex", gap: ".5rem", marginTop: "1rem" }}>
-        <button className="btn btn-primary" onClick={save} disabled={busy}>{t("save")}</button>
-        <button className="btn" onClick={onClose}>{t("cancel")}</button>
-        {item && <button className="btn btn-danger" style={{ marginLeft: "auto" }} onClick={del}>{t("delete")}</button>}
-      </div>
-    </Modal>
   );
 }
