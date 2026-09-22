@@ -17,7 +17,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const lc = jar.get("hishab_locale")?.value;
   const locale: Locale = isLocale(lc) ? lc : "en";
 
-  const businesses = businessesForUser(user.id).map((b) => ({ id: b.id, name: b.name, role: b.role }));
+  const businesses = businessesForUser(user.id).map((b) => ({ id: b.id, name: b.name, role: b.role, logo: b.logo || null }));
 
   return (
     <Providers locale={locale}>
@@ -27,6 +27,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         businesses={businesses}
         activeBusinessId={ab.business.id}
         businessName={ab.business.name}
+        businessLogo={ab.business.logo || null}
       >
         {children}
       </AppShell>
