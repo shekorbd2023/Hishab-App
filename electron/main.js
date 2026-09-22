@@ -66,14 +66,15 @@ function waitForServer(win, tries = 0) {
 }
 
 function createWindow() {
-  const win = new BrowserWindow({ width: 1280, height: 820, title: "Hishab", webPreferences: { contextIsolation: true } });
+  const winIcon = resourcePath("standalone", "public", "icon.png");
+  const win = new BrowserWindow({ width: 1280, height: 820, title: "Hishab", icon: winIcon, webPreferences: { contextIsolation: true } });
   waitForServer(win);
 }
 
 const lock = app.requestSingleInstanceLock();
 if (!lock) { app.quit(); }
 else {
-  app.whenReady().then(() => { log("app ready; packaged=" + app.isPackaged); startServer(); createWindow();
+  app.whenReady().then(() => { try{ app.setAppUserModelId("app.hishab.desktop"); }catch(e){} log("app ready; packaged=" + app.isPackaged); startServer(); createWindow();
     app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); }); });
   app.on("window-all-closed", () => { if (serverProc) serverProc.kill(); if (process.platform !== "darwin") app.quit(); });
   app.on("quit", () => { if (serverProc) serverProc.kill(); });
