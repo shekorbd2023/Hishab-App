@@ -67,6 +67,7 @@ export default function DocumentEditor({
   const [scan, setScan] = useState("");
   const [addParty, setAddParty] = useState<string | null>(null);
   const scanRef = useRef<HTMLInputElement>(null);
+  const [amtEdit, setAmtEdit] = useState<{ key: string; text: string } | null>(null);
 
   const isCash = !partyId || partyId === CASH;
   const party = isCash ? null : allParties.find((p) => p.id === partyId) || null;
@@ -136,6 +137,19 @@ export default function DocumentEditor({
 
   /* ---------- lines ---------- */
   const setLine = (key: string, patch: Partial<ELine>) => setLines((ls) => ls.map((l) => (l.key === key ? { ...l, ...patch } : l)));
+  /** Typed line amount → new rate, keeping qty and the line discount (percent or flat). */
+  const applyAmount = (l: ELine, text: string) => {
+    const A = num(text);
+    let q = num(l.qty);
+    const patch: Partial<ELine> = {};
+    if (!(q > 0)) { if (!(A > 0)) return; q = 1; patch.qty = "1"; }
+    let rate: number;
+    if (l.discMode === "percent" && num(l.discPct) > 0 && num(l.discPct) < 100) rate = A / (q * (1 - num(l.discPct) / 100));
+    else if (l.discMode === "flat" && num(l.discTk) > 0) rate = (A + num(l.discTk)) / q;
+    else rate = A / q;
+    patch.rate = A > 0 ? String(Math.round(rate * 10000) / 10000) : "";
+    setLine(l.key, patch);
+  };
   const focusSel = (sel: string) => setTimeout(() => { const el = rootRef.current?.querySelector<HTMLInputElement>(sel); el?.focus(); el?.select?.(); }, 30);
 
   function pickItem(key: string, id: string | null) {
@@ -316,7 +330,7 @@ export default function DocumentEditor({
                 <th style={{ width: 130 }}>Quantity</th>
                 <th style={{ width: 120 }}>Rate (Tk.)</th>
                 <th style={{ width: 190 }}>Discount</th>
-                <th className="num" style={{ width: 120 }}>Amount</th>
+                <th className="num" style={{ width: 140 }}>Amount</th>
                 <th style={{ width: 44 }} />
               </tr>
             </thead>
@@ -357,7 +371,17 @@ export default function DocumentEditor({
                           onChange={(e) => setLine(l.key, { discMode: "flat", discTk: e.target.value, discPct: "" })} /><span>Tk.</span></div>
                       </div>
                     </td>
-                    <td className="num" style={{ fontWeight: 600 }}>{tk(r2(amount))}</td>
+                    <td className="num">
+                      {/* Karbar: the amount is editable — typing it back-calculates the rate (e.g. 0.25 × ? = 190 → rate 760). */}
+                      <div className="de-sfx de-amtin">
+                        <input data-amt={l.key} className="input" inputMode="decimal" placeholder="0"
+                          value={amtEdit?.key === l.key ? amtEdit.text : amount ? String(r2(amount)) : ""}
+                          onFocus={(e) => { setAmtEdit({ key: l.key, text: amount ? String(r2(amount)) : "" }); e.currentTarget.select(); }}
+                          onChange={(e) => { setAmtEdit({ key: l.key, text: e.target.value }); applyAmount(l, e.target.value); }}
+                          onBlur={() => setAmtEdit(null)} />
+                        <span>Tk.</span>
+                      </div>
+                    </td>
                     <td>
                       {!isLast && (
                         <button type="button" className="btn btn-icon btn-sm btn-ghost de-del" onClick={() => removeLine(l.key)} title="Remove Item" aria-label="Remove Item">

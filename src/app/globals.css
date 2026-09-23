@@ -848,3 +848,4 @@ html[data-splash="seen"] .hs-splash { display: none; }
 .ins-track { height: 6px; background: var(--hover); border-radius: 4px; overflow: hidden; }
 .ins-track > div { height: 100%; background: var(--brand); border-radius: 4px; }
 /* === end Insights === */
+.de-amtin > .input { text-align: right; font-weight: 600; padding-right: 2.3rem; }

@@ -39,7 +39,38 @@ function connect(): DatabaseSync {
     }
   }
   db.exec(SCHEMA_SQL);
+  if (!isBuild) runDataFixes(db);
   return db;
+}
+
+/* ---- One-time data fixes, tracked with PRAGMA user_version -------------------
+ * v1: Karbar exported most Shekor items without a unit, so they all showed "PCS".
+ *     Loose goods (dates, gur, sweets, loose honey, the 1 kg items) are sold by weight → KG,
+ *     the 1-litre oil → LTR; fixed packs (250gm / 500ml …) stay PCS. Only touches items still on
+ *     the default unit, so anything the user changed by hand is left alone. */
+const SHEKOR_UNITS: Record<string, string> = {
+  "Ajwa": "KG", "Irani Maryam": "KG", "Mabroom large": "KG", "Medjool Small": "KG", "Medjool large": "KG",
+  "Medjul medium": "KG", "Safawi": "KG", "Sukkari mufattal": "KG", "Mashruk": "KG",
+  "Khejurer Box patali gur": "KG", "Khejurer Khuri Patali": "KG", "khejurer bij gur": "KG", "Lal Ata": "KG",
+  "Para shondesh": "KG", "Roshkodom": "KG", "Lichi honey -New season": "KG", "Sundaban honey-New season": "KG",
+  "Plum honey": "KG", "Black seed Honey 1kg": "KG", "Shorisha Honey 1kg": "KG", "Sundarban Honey 1kg": "KG",
+  "Maghi Shorishar Tel 1Litre": "LTR",
+};
+function runDataFixes(db: DatabaseSync) {
+  try {
+    const v = Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version) || 0;
+    if (v < 1) {
+      const isDefault = "(unit IS NULL OR TRIM(unit) = '' OR LOWER(unit) IN ('pcs','pc','piece'))";
+      const upItem = db.prepare(`UPDATE items SET unit = ? WHERE name = ? AND ${isDefault}`);
+      const upLines = db.prepare(`UPDATE doc_items SET unit = ? WHERE name = ? AND ${isDefault}`);
+      db.exec("BEGIN");
+      for (const [name, unit] of Object.entries(SHEKOR_UNITS)) { upItem.run(unit, name); upLines.run(unit, name); }
+      db.exec("PRAGMA user_version = 1");
+      db.exec("COMMIT");
+    }
+  } catch {
+    try { db.exec("ROLLBACK"); } catch { /* ignore */ }
+  }
 }
 
 export function getDb(): DatabaseSync {
