@@ -12,10 +12,10 @@ export default function RemindersClient({ reminders, parties }: { reminders: Rem
   const { t } = useT();
   const router = useRouter();
   const [show, setShow] = useState(false);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = new Date(Date.now() + 6 * 3600 * 1000).toISOString().slice(0, 10);
 
-  async function toggle(r: Rem) { await api("/api/reminders", { op: "done", id: r.id, done: r.done ? 0 : 1 }); router.refresh(); }
-  async function del(id: string) { if (!confirm("Delete reminder?")) return; await api("/api/reminders", { op: "delete", id }); router.refresh(); }
+  async function toggle(r: Rem) { const { ok, data } = await api("/api/reminders", { op: "done", id: r.id, done: r.done ? 0 : 1 }); if (!ok) alert(String(data.error || "Could not update")); router.refresh(); }
+  async function del(id: string) { if (!confirm("Delete reminder?")) return; const { ok, data } = await api("/api/reminders", { op: "delete", id }); if (!ok) alert(String(data.error || "Could not delete")); router.refresh(); }
 
   return (
     <div>
@@ -49,7 +49,7 @@ export default function RemindersClient({ reminders, parties }: { reminders: Rem
 
 function AddForm({ parties, onClose, onSaved }: { parties: Ref[]; onClose: () => void; onSaved: () => void }) {
   const { t } = useT();
-  const [f, setF] = useState({ party_id: "", due_date: new Date().toISOString().slice(0, 10), note: "" });
+  const [f, setF] = useState({ party_id: "", due_date: new Date(Date.now() + 6 * 3600 * 1000).toISOString().slice(0, 10), note: "" });
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setF({ ...f, [k]: e.target.value });
   async function save() {
     const { ok, data } = await api("/api/reminders", { op: "create", ...f });

@@ -44,11 +44,22 @@ Railway redeploys on every push to `main`.
 > Tip: to keep source private but the installer shareable, move `capacitor-wrapper/` and
 > `.github/workflows/build-apk.yml` into a separate **public** repo.
 
-## 4. Windows .exe
-1. GitHub → Actions → **Build Windows EXE** → Run workflow (uses a Windows runner, ~6–10 min).
-2. Download from the `exe-latest` release. Run the installer (NSIS, user-selectable folder).
-3. The desktop app runs the bundled server locally and stores data in the Windows user
-   profile, so data survives reinstalls.
+## 4. Windows .exe (auto-updating)
+**First install:** download `Hishab-Setup.exe` from the `exe-latest` release
+(`https://github.com/shekorbd2023/Hishab-App/releases/download/exe-latest/Hishab-Setup.exe`)
+and run it. Data is stored in the Windows user profile, so it survives updates and reinstalls.
+
+**Releasing an update (no reinstall on the PC):**
+1. Bump `"version"` in `package.json` **and** `electron/package.json` (e.g. `0.3.1`), commit.
+2. `git tag v0.3.1 && git push origin main v0.3.1`
+3. The **Build Windows EXE** workflow builds the installer and publishes release `v0.3.1`
+   (with `latest.yml`). Every installed copy (0.3.0 or newer) checks for it on start and every
+   4 hours, downloads it in the background, and asks "Restart now / Later". "Later" installs it
+   when the app is closed.
+
+Notes: the repo must stay **public** (the updater reads GitHub Releases without a token), and
+the versioned release must be the repo's "Latest" release — the `exe-latest`/`apk-latest`
+releases are created with `--latest=false` for that reason. Update log: `%APPDATA%/Hishab/hishab.log`.
 
 ## Notes
 - Secrets/keys never go in git (`.gitignore` covers `data/`, `.env`, build outputs).

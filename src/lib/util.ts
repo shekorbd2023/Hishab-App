@@ -8,8 +8,9 @@ export function nowIso(): string {
   return new Date().toISOString();
 }
 
+/** Today's date on the Bangladesh (Asia/Dhaka, UTC+6) calendar, independent of the server's timezone. */
 export function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
+  return new Date(Date.now() + 6 * 3600 * 1000).toISOString().slice(0, 10);
 }
 
 // ---- Money (Western digits, thousands separators, 2dp when needed) -----------

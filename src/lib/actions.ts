@@ -167,7 +167,7 @@ export function createDocument(input: CreateDocInput): { id: string; number: num
       ]
     );
     insertLines(id, input.lines);
-    insertAutoPayment(input, id, Math.min(Number(input.paidAmount) || 0, t.total || Number(input.paidAmount) || 0));
+    insertAutoPayment(input, id, round2(Math.min(Number(input.paidAmount) || 0, t.total || Number(input.paidAmount) || 0)));
     refreshDocStatus(id, t.total, input.kind);
     return { id, number, total: t.total };
   });
@@ -194,7 +194,8 @@ export function updateDocument(id: string, input: CreateDocInput): { id: string;
     run("DELETE FROM doc_items WHERE document_id=?", [id]);
     insertLines(id, input.lines);
     run("DELETE FROM payments WHERE document_id=? AND is_auto=1", [id]);
-    insertAutoPayment({ ...input, kind: cur.kind as DocKind }, id, Number(input.paidAmount) || 0);
+    const paid = Number(input.paidAmount) || 0;
+    insertAutoPayment({ ...input, kind: cur.kind as DocKind }, id, round2(Math.min(paid, t.total || paid)));
     // keep party on any other linked payments in sync
     run("UPDATE payments SET party_id=? WHERE document_id=?", [input.partyId ?? null, id]);
     refreshDocStatus(id, t.total, cur.kind);
@@ -268,7 +269,7 @@ export function cloneDocument(businessId: string, sourceId: string, targetKind: 
     "SELECT item_id, name, qty, rate, discount_type, discount_value, tax_rate, unit FROM doc_items WHERE document_id=?", [sourceId]
   );
   return createDocument({
-    businessId, kind: targetKind, partyId: d.party_id, date: new Date().toISOString().slice(0, 10), notes: d.notes,
+    businessId, kind: targetKind, partyId: d.party_id, date: new Date(Date.now() + 6 * 3600 * 1000).toISOString().slice(0, 10), notes: d.notes,
     lines: lines.map((l) => ({ itemId: l.item_id, name: l.name, qty: l.qty, rate: l.rate, discountType: l.discount_type as "flat" | "percent", discountValue: l.discount_value, taxRate: l.tax_rate, unit: l.unit })),
     charges: d.charges ? JSON.parse(d.charges) : [], docDiscount: d.doc_discount, roundOff: d.round_off,
     accountId: d.account_id, paymentMode: d.payment_mode, sourceId, createdBy,

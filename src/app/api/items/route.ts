@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireCtx, can, getMember } from "@/lib/auth";
 import { get, run } from "@/lib/db";
-import { uid, nowIso, parseCsv } from "@/lib/util";
+import { uid, nowIso, parseCsv, todayIso } from "@/lib/util";
 import { logAudit } from "@/lib/audit";
 
 async function guard(action: string) {
@@ -57,6 +57,11 @@ export async function POST(req: Request) {
 
   if (op === "delete") {
     const before = get("SELECT * FROM items WHERE id = ? AND business_id = ?", [body.id, bid]);
+    if (!before) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    const used = get<{ n: number }>(
+      `SELECT (SELECT COUNT(*) FROM doc_items di JOIN documents d ON d.id=di.document_id WHERE d.business_id=? AND di.item_id=?) +
+              (SELECT COUNT(*) FROM stock_adjustments WHERE business_id=? AND item_id=?) n`, [bid, body.id, bid, body.id])?.n ?? 0;
+    if (used > 0) return NextResponse.json({ error: `This item is used in ${used} transaction(s)/stock entries, so it can't be deleted (stock and profit reports would break).` }, { status: 409 });
     run("DELETE FROM items WHERE id = ? AND business_id = ?", [body.id, bid]);
     logAudit({ businessId: bid, userId: ctx!.user.id, userName: ctx!.user.name, action: "delete", entity: "item", entityId: body.id, summary: "Deleted item", before });
     return NextResponse.json({ ok: true });
@@ -64,10 +69,11 @@ export async function POST(req: Request) {
 
   if (op === "adjust") {
     const delta = NUM(body.qty_delta);
+    if (!get("SELECT id FROM items WHERE id=? AND business_id=?", [body.id, bid])) return NextResponse.json({ error: "Not found" }, { status: 404 });
     if (!delta) return NextResponse.json({ error: "Enter a non-zero quantity." }, { status: 400 });
     run(
       "INSERT INTO stock_adjustments (id, business_id, item_id, qty_delta, reason, date, created_by, created_at) VALUES (?,?,?,?,?,?,?,?)",
-      [uid(), bid, body.id, delta, body.reason ?? null, body.date || nowIso().slice(0, 10), ctx!.user.name, nowIso()]
+      [uid(), bid, body.id, delta, body.reason ?? null, body.date || todayIso(), ctx!.user.name, nowIso()]
     );
     logAudit({ businessId: bid, userId: ctx!.user.id, userName: ctx!.user.name, action: "update", entity: "item", entityId: body.id, summary: `Stock adjusted by ${delta}` });
     return NextResponse.json({ ok: true });

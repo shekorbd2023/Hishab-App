@@ -11,7 +11,7 @@ export async function POST(req: Request) {
   const ctx = await requireCtx();
   if (!ctx) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const bid = ctx.business.id;
-  const b = await req.json();
+  const b = await req.json().catch(() => ({}));
   const manager = ctx.role === "Owner" || ctx.role === "Admin" || ctx.role === "Partner";
 
   // --- My Account (any member can edit their own profile)
@@ -48,7 +48,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, settings: getSettings(bid) });
   }
 
-  // --- Legacy form (old /settings page)
+  // --- Legacy form (old /settings page) — only when no op is given, so a typo'd op can't wipe the profile
+  if (b.op) return NextResponse.json({ error: "Unknown op" }, { status: 400 });
   run("UPDATE businesses SET name=?, address=?, phone=?, currency_symbol=?, logo=? WHERE id=?",
     [b.name || ctx.business.name, b.address ?? null, b.phone ?? null, b.currency_symbol || "Tk.", b.logo ?? null, bid]);
   saveSettings(bid, { invoice_footer: b.invoice_footer ?? "", default_tax: Number(b.default_tax) || 0, show_logo: !!b.show_logo, show_business_logo: !!b.show_logo });

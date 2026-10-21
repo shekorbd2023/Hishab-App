@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { requireCtx } from "@/lib/auth";
+import { requireCtx, isManager } from "@/lib/auth";
+import { TODAY } from "@/lib/format";
 import { all } from "@/lib/db";
 import { partyBalances, accountBalances, itemStocks, sumDocuments, sumExpenses, sumIncomes } from "@/lib/domain";
 
@@ -46,6 +47,7 @@ function computed(bid: string) {
 export async function GET(req: Request) {
   const ctx = await requireCtx();
   if (!ctx) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!isManager(ctx.role)) return NextResponse.json({ error: "Only the owner, admin or partner can export the full business." }, { status: 403 });
   const bid = ctx.business.id;
   const withReport = new URL(req.url).searchParams.get("report") === "1";
   const data: Record<string, unknown[]> = {};
@@ -66,7 +68,7 @@ export async function GET(req: Request) {
     data,
   };
   const base = ctx.business.name.replace(/[^a-z0-9]/gi, "_");
-  const day = new Date().toISOString().slice(0, 10);
+  const day = TODAY();
   return new NextResponse(JSON.stringify(payload, null, 2), {
     headers: {
       "content-type": "application/json",

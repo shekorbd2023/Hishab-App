@@ -80,6 +80,11 @@ export async function POST(req: Request) {
 
   if (op === "delete") {
     const before = get("SELECT * FROM parties WHERE id = ? AND business_id = ?", [body.id, bid]);
+    if (!before) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    const used = get<{ n: number }>(
+      `SELECT (SELECT COUNT(*) FROM documents WHERE business_id=? AND party_id=?) +
+              (SELECT COUNT(*) FROM payments WHERE business_id=? AND party_id=?) n`, [bid, body.id, bid, body.id])?.n ?? 0;
+    if (used > 0) return NextResponse.json({ error: `This party has ${used} transaction(s). Delete those first — deleting the party would silently remove its due from your books.` }, { status: 409 });
     run("DELETE FROM parties WHERE id = ? AND business_id = ?", [body.id, bid]);
     logAudit({ businessId: bid, userId: ctx!.user.id, userName: ctx!.user.name, action: "delete", entity: "party", entityId: body.id, summary: `Deleted party`, before });
     return NextResponse.json({ ok: true });

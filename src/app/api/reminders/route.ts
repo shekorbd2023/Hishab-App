@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireCtx } from "@/lib/auth";
+import { requireCtx, allowed, belongs } from "@/lib/auth";
 import { run } from "@/lib/db";
 import { uid, nowIso } from "@/lib/util";
 import { logAudit } from "@/lib/audit";
@@ -10,6 +10,10 @@ export async function POST(req: Request) {
   const bid = ctx.business.id;
   const body = await req.json();
   const op = body.op as string;
+  if (!allowed(ctx, "parties", op === "delete" ? "delete" : op === "done" ? "edit" : "create"))
+    return NextResponse.json({ error: "You don't have permission for this." }, { status: 403 });
+  if (op === "create" && (!body.due_date || !belongs("parties", body.party_id, bid)))
+    return NextResponse.json({ error: "Pick a party and a date." }, { status: 400 });
 
   if (op === "create") {
     const id = uid();

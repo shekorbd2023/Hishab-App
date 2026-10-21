@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { requireCtx, can, getMember } from "@/lib/auth";
-import { get, run } from "@/lib/db";
+import { requireCtx, can, getMember, belongs } from "@/lib/auth";
+import { get, run, tx } from "@/lib/db";
 import { createDocument, updateDocument, cloneDocument, type LineInput, type Charge, type DocKind } from "@/lib/actions";
 import { logAudit } from "@/lib/audit";
 
@@ -14,7 +14,7 @@ function parseLines(raw: unknown): LineInput[] {
   return ((raw as LineInput[]) || [])
     .filter((l) => l && l.name && Number(l.qty) > 0)
     .map((l) => ({
-      itemId: l.itemId ?? null, name: String(l.name), qty: Number(l.qty) || 0, rate: Number(l.rate) || 0,
+      itemId: l.itemId || null, name: String(l.name), qty: Number(l.qty) || 0, rate: Number(l.rate) || 0,
       discountType: l.discountType === "percent" ? "percent" : "flat", discountValue: Number(l.discountValue) || 0,
       taxRate: Number(l.taxRate) || 0, unit: l.unit ?? null,
     }));
@@ -43,6 +43,9 @@ export async function POST(req: Request) {
     }
     if (!KINDS.includes(kind)) return NextResponse.json({ error: "Bad kind" }, { status: 400 });
     if (!allow(kind, op === "create" ? "create" : "edit")) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (!belongs("parties", body.party_id, bid) || !belongs("accounts", body.account_id, bid))
+      return NextResponse.json({ error: "Party or account not found." }, { status: 404 });
+    if (!body.date || !/^\d{4}-\d{2}-\d{2}$/.test(String(body.date))) return NextResponse.json({ error: "Pick a valid date." }, { status: 400 });
     const lines = parseLines(body.lines);
     if (lines.length === 0) return NextResponse.json({ error: "Add at least one item." }, { status: 400 });
     const manual = Number(body.number) > 0 ? Math.floor(Number(body.number)) : null;
@@ -57,6 +60,8 @@ export async function POST(req: Request) {
       dueDate: body.due_date || null, paidAmount: Number(body.paid_amount) || 0, accountId: body.account_id || null,
       createdBy: ctx.user.name,
     };
+    const okItems = lines.every((l) => belongs("items", l.itemId, bid));
+    if (!okItems) return NextResponse.json({ error: "An item in this bill was not found." }, { status: 404 });
     const res = op === "create" ? createDocument(input) : updateDocument(body.id, input);
     logAudit({ businessId: bid, userId: ctx.user.id, userName: ctx.user.name, action: op, entity: kind, entityId: res.id, summary: `${op === "create" ? "Created" : "Edited"} ${kind} #${res.number} — ${res.total}` });
     return NextResponse.json({ ok: true, ...res });
@@ -77,8 +82,10 @@ export async function POST(req: Request) {
     const before = get<{ kind: string; number: number }>("SELECT kind, number FROM documents WHERE id=? AND business_id=?", [body.id, bid]);
     if (!before) return NextResponse.json({ error: "Not found" }, { status: 404 });
     if (!allow(before.kind, "delete")) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    run("DELETE FROM payments WHERE document_id=? AND is_auto=1", [body.id]);
-    run("DELETE FROM documents WHERE id=? AND business_id=?", [body.id, bid]);
+    tx(() => {
+      run("DELETE FROM payments WHERE document_id=? AND is_auto=1", [body.id]);
+      run("DELETE FROM documents WHERE id=? AND business_id=?", [body.id, bid]);
+    });
     logAudit({ businessId: bid, userId: ctx.user.id, userName: ctx.user.name, action: "delete", entity: before.kind, entityId: body.id, summary: `Deleted ${before.kind} #${before.number}`, before });
     return NextResponse.json({ ok: true });
   }

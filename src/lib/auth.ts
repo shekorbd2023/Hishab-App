@@ -97,6 +97,47 @@ export function can(role: string, permissions: string | null, module: string, ac
   }
 }
 
+/** Permission check for the current member in the active business. */
+export function allowed(ctx: Ctx, module: string, action: string): boolean {
+  const m = getMember(ctx.business.id, ctx.user.id);
+  return can(ctx.role, m?.permissions ?? null, module, action);
+}
+
+export const ROLES = ["Owner", "Admin", "Partner", "Staff"] as const;
+export const isManager = (role: string) => role === "Owner" || role === "Admin" || role === "Partner";
+
+/** True when `id` is a row of `table` inside this business (guards cross-business references). */
+export function belongs(table: "parties" | "accounts" | "items" | "documents", id: unknown, businessId: string): boolean {
+  if (id === null || id === undefined || id === "") return true;
+  return !!get(`SELECT id FROM ${table} WHERE id = ? AND business_id = ?`, [String(id), businessId]);
+}
+
+/* ---- Login throttling (in-memory, per email+IP) ---------------------------- */
+const attempts = new Map<string, { n: number; until: number; first: number }>();
+const WINDOW = 15 * 60 * 1000, MAX_TRIES = 8, LOCK = 15 * 60 * 1000;
+export function loginBlocked(key: string): number {
+  const a = attempts.get(key);
+  if (!a) return 0;
+  const now = Date.now();
+  if (a.until > now) return Math.ceil((a.until - now) / 60000);
+  if (now - a.first > WINDOW) attempts.delete(key);
+  return 0;
+}
+export function loginFailed(key: string) {
+  const now = Date.now();
+  const a = attempts.get(key);
+  if (!a || now - a.first > WINDOW) { attempts.set(key, { n: 1, until: 0, first: now }); return; }
+  a.n++;
+  if (a.n >= MAX_TRIES) a.until = now + LOCK;
+}
+export function loginSucceeded(key: string) { attempts.delete(key); }
+
+/** Session cookie options; `secure` only over HTTPS so the local desktop app (http://127.0.0.1) keeps working. */
+export function cookieOpts(req: Request, httpOnly = true) {
+  const proto = req.headers.get("x-forwarded-proto") || new URL(req.url).protocol.replace(":", "");
+  return { httpOnly, sameSite: "lax" as const, path: "/", maxAge: 60 * 60 * 24 * 60, secure: proto === "https" };
+}
+
 export function createBusinessForUser(ownerId: string, name: string): string {
   const id = uid();
   const now = nowIso();

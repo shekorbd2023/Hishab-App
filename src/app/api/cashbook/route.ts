@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
-import { requireCtx } from "@/lib/auth";
+import { requireCtx, allowed, belongs } from "@/lib/auth";
 import { get, run } from "@/lib/db";
 import { uid, nowIso } from "@/lib/util";
 import { logAudit } from "@/lib/audit";
-import { takeNumber } from "@/lib/actions";
+import { takeNumber, round2 } from "@/lib/actions";
 
 export async function POST(req: Request) {
   const ctx = await requireCtx();
@@ -12,12 +12,17 @@ export async function POST(req: Request) {
   const body = await req.json();
   const table = body.kind === "income" ? "incomes" : "expenses";
   const op = body.op as string;
+  const mod = table === "incomes" ? "income" : "expense";
+  const action = op === "update" ? "edit" : op === "delete" ? "delete" : "create";
+  if (!allowed(ctx, mod, action)) return NextResponse.json({ error: "You don't have permission for this." }, { status: 403 });
+  if ((op === "create" || op === "update") && !belongs("accounts", body.account_id, bid))
+    return NextResponse.json({ error: "Account not found." }, { status: 404 });
 
   // Optional itemised lines [{name, qty, rate}] → amount = Σ qty × rate
   const lines = Array.isArray(body.lines)
     ? (body.lines as { name: string; qty: number; rate: number }[]).filter((l) => l && l.name).map((l) => ({ name: String(l.name), qty: Number(l.qty) || 1, rate: Number(l.rate) || 0 }))
     : [];
-  const amount = lines.length ? lines.reduce((a, l) => a + l.qty * l.rate, 0) : Number(body.amount) || 0;
+  const amount = round2(lines.length ? lines.reduce((a, l) => a + l.qty * l.rate, 0) : Number(body.amount) || 0);
 
   if (op === "add_category") {
     const name = String(body.name || "").trim();
@@ -28,6 +33,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, name });
   }
 
+  if ((op === "create" || op === "update") && amount <= 0) return NextResponse.json({ error: "Enter an amount." }, { status: 400 });
   if (op === "create") {
     const id = uid();
     const number = takeNumber(bid, table === "incomes" ? "income" : "expense", Number(body.number) > 0 ? Number(body.number) : null);
@@ -47,6 +53,7 @@ export async function POST(req: Request) {
   }
   if (op === "delete") {
     const before = get(`SELECT * FROM ${table} WHERE id=? AND business_id=?`, [body.id, bid]);
+    if (!before) return NextResponse.json({ error: "Not found" }, { status: 404 });
     run(`DELETE FROM ${table} WHERE id=? AND business_id=?`, [body.id, bid]);
     logAudit({ businessId: bid, userId: ctx.user.id, userName: ctx.user.name, action: "delete", entity: body.kind, entityId: body.id, summary: `Deleted ${body.kind}`, before });
     return NextResponse.json({ ok: true });

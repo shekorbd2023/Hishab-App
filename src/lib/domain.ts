@@ -168,8 +168,8 @@ export function docPaid(documentId: string): number {
 export function monthRange(d = new Date()): { from: string; to: string; label: string } {
   const y = d.getFullYear();
   const m = d.getMonth();
-  const from = new Date(y, m, 1).toISOString().slice(0, 10);
-  const to = new Date(y, m + 1, 0).toISOString().slice(0, 10);
+  const from = new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10);
+  const to = new Date(Date.UTC(y, m + 1, 0)).toISOString().slice(0, 10);
   const label = d.toLocaleString("en-US", { month: "long", year: "numeric" });
   return { from, to, label };
 }

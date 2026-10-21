@@ -1,4 +1,4 @@
-const { app, BrowserWindow } = require("electron");
+const { app, BrowserWindow, dialog } = require("electron");
 const { fork } = require("child_process");
 const path = require("path");
 const http = require("http");
@@ -65,17 +65,56 @@ function waitForServer(win, tries = 0) {
   });
 }
 
+/* ---- Auto-update --------------------------------------------------------------
+ * Checks GitHub Releases (shekorbd2023/Hishab-App) for a newer version on start and every 4 hours,
+ * downloads it in the background and installs it on restart. Data lives in userData, which the
+ * installer never touches, so updates keep every business, invoice and setting. */
+let mainWin = null;
+function setupAutoUpdate() {
+  if (!app.isPackaged) return;
+  let autoUpdater;
+  try { ({ autoUpdater } = require("electron-updater")); } catch (e) { log("updater missing: " + e.message); return; }
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.logger = { info: (m) => log("[upd] " + m), warn: (m) => log("[upd] WARN " + m), error: (m) => log("[upd] ERR " + m), debug: () => {} };
+  autoUpdater.on("update-available", (i) => log("update available: " + i.version));
+  autoUpdater.on("update-not-available", () => log("no update"));
+  autoUpdater.on("error", (e) => log("update error: " + (e && e.message)));
+  autoUpdater.on("update-downloaded", async (info) => {
+    log("update downloaded: " + info.version);
+    const r = await dialog.showMessageBox(mainWin || undefined, {
+      type: "info",
+      buttons: ["এখনই রিস্টার্ট করুন (Restart now)", "পরে (Later)"],
+      defaultId: 0, cancelId: 1,
+      title: "Hishab update",
+      message: "Hishab " + info.version + " ডাউনলোড হয়েছে।",
+      detail: "রিস্টার্ট করলেই নতুন ভার্সন চালু হবে। আপনার সব ডেটা আগের মতোই থাকবে।\n\n" +
+        "\"পরে\" চাপলে অ্যাপ বন্ধ করার সময় আপডেট নিজে থেকেই ইনস্টল হবে।",
+    });
+    if (r.response === 0) {
+      if (serverProc) { try { serverProc.kill(); } catch (e) {} }
+      setImmediate(() => autoUpdater.quitAndInstall(true, true));
+    }
+  });
+  const check = () => autoUpdater.checkForUpdates().catch((e) => log("check failed: " + (e && e.message)));
+  setTimeout(check, 10 * 1000);
+  setInterval(check, 4 * 60 * 60 * 1000);
+}
+
 function createWindow() {
   const winIcon = resourcePath("standalone", "public", "icon.png");
-  const win = new BrowserWindow({ width: 1280, height: 820, title: "Hishab", icon: winIcon, webPreferences: { contextIsolation: true } });
+  const win = new BrowserWindow({ width: 1280, height: 820, title: "Hishab " + app.getVersion(), icon: winIcon, webPreferences: { contextIsolation: true } });
+  mainWin = win;
+  win.on("page-title-updated", (e) => e.preventDefault());
   waitForServer(win);
 }
 
 const lock = app.requestSingleInstanceLock();
 if (!lock) { app.quit(); }
 else {
-  app.whenReady().then(() => { try{ app.setAppUserModelId("app.hishab.desktop"); }catch(e){} log("app ready; packaged=" + app.isPackaged); startServer(); createWindow();
+  app.whenReady().then(() => { try{ app.setAppUserModelId("app.hishab.desktop"); }catch(e){} log("app ready; packaged=" + app.isPackaged); startServer(); createWindow(); setupAutoUpdate();
     app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); }); });
+  app.on("second-instance", () => { if (mainWin) { if (mainWin.isMinimized()) mainWin.restore(); mainWin.focus(); } });
   app.on("window-all-closed", () => { if (serverProc) serverProc.kill(); if (process.platform !== "darwin") app.quit(); });
   app.on("quit", () => { if (serverProc) serverProc.kill(); });
 }

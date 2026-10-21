@@ -3,6 +3,8 @@ import { requireCtx, can, getMember } from "@/lib/auth";
 import { all, run, tx } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
 import { uid, nowIso } from "@/lib/util";
+import fs from "node:fs";
+import path from "node:path";
 
 const TABLES = [
   "parties", "items", "accounts", "documents", "payments",
@@ -43,7 +45,7 @@ export async function POST(req: Request) {
   if (body.op === "parties" || body.op === "items") {
     const mod = body.op as "parties" | "items";
     const m = getMember(bid, ctx.user.id);
-    if (!can(ctx.role, m?.permissions ?? null, mod, "create")) return NextResponse.json({ error: "You don't have permission to add " + mod + "." }, { status: 403 });
+    if (!can(ctx.role, m?.permissions ?? null, mod === "items" ? "inventory" : mod, "create")) return NextResponse.json({ error: "You don't have permission to add " + mod + "." }, { status: 403 });
     const rows = (Array.isArray(body.rows) ? body.rows : []) as Row[];
     if (!rows.length) return NextResponse.json({ error: "No rows to import." }, { status: 400 });
     if (rows.length > MAX_ROWS) return NextResponse.json({ error: `You can import up to ${MAX_ROWS} entries at a time.` }, { status: 400 });
@@ -100,28 +102,59 @@ export async function POST(req: Request) {
   }
   const data = payload.data as Record<string, Record<string, unknown>[]>;
 
+  // Only real columns of each table may be written (a crafted backup can't inject SQL through key names).
+  const colsOf = (tbl: string) => new Set(all<{ name: string }>(`PRAGMA table_info(${tbl})`).map((c) => c.name));
+  // Backups from another business (or a copy of this one restored elsewhere) would clash on primary keys,
+  // so every row id is re-mapped to a fresh id and every *_id reference is rewritten through the same map.
+  const srcBiz = String((payload.business as { id?: string } | undefined)?.id || "");
+  const remap = srcBiz !== bid;
+  const idMap = new Map<string, string>();
+  if (remap) {
+    for (const tbl of [...TABLES, "doc_items"]) for (const r of data[tbl] || []) if (r && typeof r.id === "string") idMap.set(r.id, uid());
+  }
+  const REF_COLS = ["party_id", "item_id", "account_id", "document_id", "from_account_id", "to_account_id", "source_id"];
+
+  // Safety net: snapshot the current data to disk before wiping it.
+  try {
+    const snap: Record<string, unknown[]> = {};
+    for (const tbl of TABLES) snap[tbl] = all(`SELECT * FROM ${tbl} WHERE business_id = ?`, [bid]);
+    snap.doc_items = all("SELECT di.* FROM doc_items di JOIN documents d ON d.id = di.document_id WHERE d.business_id = ?", [bid]);
+    const dir = path.join(process.env.SMS_DATA_DIR || path.join(process.cwd(), "data"), "backups");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `before-restore_${bid}_${Date.now()}.json`),
+      JSON.stringify({ format: "hishab-business-export", version: 1, exported_at: nowIso(), business: { id: bid, name: ctx.business.name }, data: snap }));
+  } catch { /* best effort */ }
+
   try {
     tx(() => {
       // Clear existing domain data for this business
       run("DELETE FROM doc_items WHERE document_id IN (SELECT id FROM documents WHERE business_id = ?)", [bid]);
       for (const tbl of TABLES) run(`DELETE FROM ${tbl} WHERE business_id = ?`, [bid]);
 
-      const insertRows = (tbl: string, rows: Record<string, unknown>[], forceBiz = true) => {
+      const insertRows = (tbl: string, rows: Record<string, unknown>[]) => {
+        const valid = colsOf(tbl);
         for (const row of rows || []) {
-          const r = { ...row };
-          if (forceBiz && "business_id" in r) r.business_id = bid;
+          if (!row || typeof row !== "object") continue;
+          const r: Record<string, unknown> = {};
+          for (const [k, v] of Object.entries(row)) if (valid.has(k)) r[k] = v;
+          if (valid.has("business_id")) r.business_id = bid;
+          if (remap) {
+            if (typeof r.id === "string") r.id = idMap.get(r.id) ?? uid();
+            for (const c of REF_COLS) if (typeof r[c] === "string") r[c] = idMap.get(r[c] as string) ?? null;
+          }
           const cols = Object.keys(r);
           if (cols.length === 0) continue;
-          const placeholders = cols.map(() => "?").join(",");
-          run(`INSERT INTO ${tbl} (${cols.join(",")}) VALUES (${placeholders})`, cols.map((c) => r[c] as unknown));
+          run(`INSERT INTO ${tbl} (${cols.map((c) => `"${c}"`).join(",")}) VALUES (${cols.map(() => "?").join(",")})`, cols.map((c) => r[c]));
         }
       };
       for (const tbl of TABLES) insertRows(tbl, data[tbl] || []);
-      // doc_items reference documents (which now belong to this business); keep as-is
-      insertRows("doc_items", (data["doc_items"] || []) as Record<string, unknown>[], false);
+      // doc_items may only point at documents that now belong to this business
+      const docIds = new Set(all<{ id: string }>("SELECT id FROM documents WHERE business_id = ?", [bid]).map((d) => d.id));
+      const lines = (data["doc_items"] || []).filter((l) => l && docIds.has(String(remap ? idMap.get(String(l.document_id)) : l.document_id)));
+      insertRows("doc_items", lines);
     });
   } catch (e) {
-    return NextResponse.json({ error: "Restore failed: " + (e as Error).message }, { status: 500 });
+    return NextResponse.json({ error: "Restore failed (your data was not changed): " + (e as Error).message }, { status: 500 });
   }
 
   logAudit({ businessId: bid, userId: ctx.user.id, userName: ctx.user.name, action: "create", entity: "restore", summary: "Restored business from JSON backup" });

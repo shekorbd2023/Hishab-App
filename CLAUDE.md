@@ -42,3 +42,17 @@ Owner | Admin | Partner | Staff. Permissions map module → actions in
 Web → Railway (Docker, volume at `/data`). Android → Capacitor wrapper (public repo,
 GitHub Actions APK). Windows → Electron + electron-builder (`windows-latest`).
 See `DEPLOY.md`.
+
+## Security rules (v0.3.0)
+- Every write API checks `allowed(ctx, module, action)` (modules: parties, inventory, sales,
+  purchase, expense, income, accounts, reports). Payment In → `sales`, Payment Out → `purchase`.
+- Any id coming from the client (party/account/item/document) is checked with `belongs()`.
+- Parties, items and accounts with transactions can't be deleted (409) — balances are derived,
+  so deleting them would silently change the books.
+- Staff: nobody can create/modify the Owner or themselves; Admins can't create/modify Admins.
+- Restore whitelists columns (PRAGMA table_info), re-maps ids for cross-business backups, and
+  snapshots current data to `<data>/backups/before-restore_*.json` first.
+- "Today" is the Asia/Dhaka date (`todayIso()` / `TODAY()`), never `new Date().toISOString()`.
+
+## Desktop releases
+Bump both package.json versions, push tag `vX.Y.Z` → installed apps auto-update (see DEPLOY.md).

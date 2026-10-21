@@ -1,6 +1,6 @@
 {
   "name": "hishab-desktop",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "private": true,
   "main": "main.js",
   "scripts": {
@@ -23,11 +23,24 @@
     "nsis": {
       "oneClick": false,
       "perMachine": false,
-      "allowToChangeInstallationDirectory": true
-    }
+      "allowToChangeInstallationDirectory": true,
+      "differentialPackage": true,
+      "artifactName": "Hishab-Setup-${version}.${ext}"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "shekorbd2023",
+        "repo": "Hishab-App",
+        "releaseType": "release"
+      }
+    ]
   },
   "devDependencies": {
     "electron": "^37.2.0",
     "electron-builder": "^26.0.12"
+  },
+  "dependencies": {
+    "electron-updater": "^6.6.2"
   }
 }

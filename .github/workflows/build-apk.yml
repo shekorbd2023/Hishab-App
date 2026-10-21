@@ -35,4 +35,4 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release delete apk-latest -y --cleanup-tag || true
-          gh release create apk-latest Hishab.apk --title "Hishab APK" --notes "Install on Android (allow unknown sources). Loads the live site."
+          gh release create apk-latest Hishab.apk --latest=false --title "Hishab APK" --notes "Install on Android (allow unknown sources). Loads the live site."

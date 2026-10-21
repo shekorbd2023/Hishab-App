@@ -1,5 +1,12 @@
 name: Build Windows EXE
+# Release flow (auto-update):
+#   1. bump "version" in package.json + electron/package.json (e.g. 0.3.1)
+#   2. git tag v0.3.1 && git push origin v0.3.1
+# This builds the installer and publishes GitHub release "v0.3.1" with latest.yml.
+# Installed apps (0.3.0+) check that release on start and update themselves — no reinstall.
 on:
+  push:
+    tags: ["v*"]
   workflow_dispatch:
 permissions:
   contents: write
@@ -11,6 +18,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
+      - name: Work out version
+        id: ver
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then V="${GITHUB_REF#refs/tags/v}"; else V=$(node -p "require('./electron/package.json').version"); fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Building Hishab $V"
+          cd electron && npm pkg set version="$V"
       - name: Build Next standalone
         run: |
           npm ci
@@ -19,26 +34,55 @@ jobs:
         run: |
           cd electron
           npm install
-          npx electron-builder --win --dir
+          npx electron-builder --win --dir --publish never
       - name: Assemble standalone payload into unpacked app
         shell: bash
         run: |
           set -x
-          DEST="dist-installer/win-unpacked/resources/standalone"
+          RES="dist-installer/win-unpacked/resources"
+          DEST="$RES/standalone"
           mkdir -p "$DEST/.next" "$DEST/public"
           cp -r .next/standalone/. "$DEST/"
           if [ -d .next/static ]; then cp -r .next/static "$DEST/.next/static"; fi
           if [ -d public ]; then cp -r public/. "$DEST/public/"; fi
-          echo "Contents of $DEST:"; ls -a "$DEST"
           if [ -d "$DEST/node_modules/next" ]; then echo "OK: next module present"; else echo "FAIL: next module missing"; exit 1; fi
+          # The updater reads this file to know where to look for new versions.
+          printf 'provider: github\nowner: shekorbd2023\nrepo: Hishab-App\nupdaterCacheDirName: hishab-desktop-updater\n' > "$RES/app-update.yml"
+          if [ -d "$RES/app.asar.unpacked" ] || [ -f "$RES/app.asar" ]; then echo "OK: app archive present"; fi
       - name: Package NSIS installer from prepared dir
         run: |
           cd electron
-          npx electron-builder --win nsis --prepackaged ../dist-installer/win-unpacked
+          npx electron-builder --win nsis --prepackaged ../dist-installer/win-unpacked --publish never
+      - name: Make sure latest.yml exists
+        shell: bash
+        run: |
+          V="${{ steps.ver.outputs.version }}"
+          EXE="Hishab-Setup-$V.exe"
+          ls -la dist-installer
+          test -f "dist-installer/$EXE" || { echo "installer missing"; exit 1; }
+          if [ ! -f dist-installer/latest.yml ]; then
+            SHA=$(openssl dgst -sha512 -binary "dist-installer/$EXE" | base64 -w0)
+            SIZE=$(stat -c%s "dist-installer/$EXE")
+            DATE=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
+            printf 'version: %s\nfiles:\n  - url: %s\n    sha512: %s\n    size: %s\npath: %s\nsha512: %s\nreleaseDate: %s\n' \
+              "$V" "$EXE" "$SHA" "$SIZE" "$EXE" "$SHA" "$DATE" > dist-installer/latest.yml
+          fi
+          cat dist-installer/latest.yml
       - name: Publish release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
+          V="${{ steps.ver.outputs.version }}"
+          cd dist-installer
+          FILES="Hishab-Setup-$V.exe latest.yml"
+          [ -f "Hishab-Setup-$V.exe.blockmap" ] && FILES="$FILES Hishab-Setup-$V.exe.blockmap"
+          gh release delete "v$V" -y || true
+          # Versioned release = what installed apps update from (must be the repo's "latest" release).
+          gh release create "v$V" $FILES --title "Hishab Desktop v$V" --latest \
+            --notes "Windows installer. Installed copies of Hishab 0.3.0+ update to this automatically; your data is kept."
+          # Stable download link for new installs (never marked latest, so it can't confuse the updater).
+          cp "Hishab-Setup-$V.exe" Hishab-Setup.exe
           gh release delete exe-latest -y --cleanup-tag || true
-          gh release create exe-latest dist-installer/*.exe --title "Hishab Desktop" --notes "Windows installer; local data preserved across reinstalls."
+          gh release create exe-latest Hishab-Setup.exe --title "Hishab Desktop (latest installer)" --latest=false \
+            --notes "Latest Windows installer (v$V). Already installed? You don't need this — the app updates itself."
