@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { Avatar, post, useToast } from "@/components/ui";
 import { PageTitle, Section } from "../SettingsKit";
 
-export default function AccountForm({ name, email, role }: { name: string; email: string; role: string }) {
+export default function AccountForm({ name, email, role, ownerOnDesktop = false }: { name: string; email: string; role: string; ownerOnDesktop?: boolean }) {
   const router = useRouter();
   const { toast, node } = useToast();
   const [n, setN] = useState(name);
@@ -31,8 +31,10 @@ export default function AccountForm({ name, email, role }: { name: string; email
       </Section>
       <Section title="Change Password">
         <div className="form-grid" style={{ padding: "1rem" }}>
-          <div className="field"><label className="label">Current Password</label><input className="input" type="password" value={cur} onChange={(e) => setCur(e.target.value)} /></div>
-          <div />
+          <div className="field"><label className="label">Current Password{ownerOnDesktop ? " (optional)" : ""}</label><input className="input" type="password" value={cur} onChange={(e) => setCur(e.target.value)} /></div>
+          <div className="sub" style={{ alignSelf: "end", fontSize: ".8rem" }}>
+            {ownerOnDesktop ? "As the Owner on this computer you can set a new password without the current one. / Owner হিসেবে পুরনো পাসওয়ার্ড ছাড়াই নতুন সেট করতে পারবেন।" : ""}
+          </div>
           <div className="field"><label className="label">New Password</label><input className="input" type="password" value={pw} onChange={(e) => setPw(e.target.value)} /></div>
           <div className="field"><label className="label">Confirm New Password</label><input className="input" type="password" value={pw2} onChange={(e) => setPw2(e.target.value)} /></div>
         </div>

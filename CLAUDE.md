@@ -54,5 +54,11 @@ See `DEPLOY.md`.
   snapshots current data to `<data>/backups/before-restore_*.json` first.
 - "Today" is the Asia/Dhaka date (`todayIso()` / `TODAY()`), never `new Date().toISOString()`.
 
+- Forgot password (v0.3.1): `/forgot-password` → `/api/auth/forgot` writes an 8-digit one-time code to
+  `<data>/PASSWORD-RESET-CODE.txt` (Electron reveals it in Explorer via IPC); `/api/auth/reset` checks it
+  (15 min, 5 tries, in-memory, sha256) and signs the user out everywhere. Both routes and the Owner's
+  "change password without the current one" (settings `op: account`) work ONLY for local requests
+  (`isLocalRequest`: Host, x-forwarded-host and every x-forwarded-for entry must be loopback — Next fills those itself for direct local requests) — never on the web deploy.
+
 ## Desktop releases
 Bump both package.json versions, push tag `vX.Y.Z` → installed apps auto-update (see DEPLOY.md).

@@ -4,6 +4,7 @@ import { get, run } from "@/lib/db";
 import { getSettings, saveSettings, SETTINGS_DEFAULTS, type BizSettings } from "@/lib/settings";
 import { logAudit } from "@/lib/audit";
 import { hashPassword, verifyPassword } from "@/lib/util";
+import { isLocalRequest } from "@/lib/reset";
 
 const BIZ_FIELDS = ["name", "phone", "email", "address", "logo", "category", "biz_type", "division", "district", "reg_no", "currency_symbol"] as const;
 
@@ -21,9 +22,12 @@ export async function POST(req: Request) {
     run("UPDATE users SET name=? WHERE id=?", [name, ctx.user.id]);
     if (b.new_password) {
       const u = get<{ password_hash: string }>("SELECT password_hash FROM users WHERE id=?", [ctx.user.id]);
-      if (!u || !verifyPassword(String(b.current_password || ""), u.password_hash)) return NextResponse.json({ error: "Current password is wrong." }, { status: 400 });
+      // The Owner, signed in on the desktop app on their own computer, may set a new password without the old one.
+      const ownerOnDesktop = ctx.role === "Owner" && isLocalRequest(req) && !b.current_password;
+      if (!u || (!ownerOnDesktop && !verifyPassword(String(b.current_password || ""), u.password_hash))) return NextResponse.json({ error: "Current password is wrong." }, { status: 400 });
       if (String(b.new_password).length < 6) return NextResponse.json({ error: "New password must be at least 6 characters." }, { status: 400 });
       run("UPDATE users SET password_hash=? WHERE id=?", [hashPassword(String(b.new_password)), ctx.user.id]);
+      logAudit({ businessId: bid, userId: ctx.user.id, userName: ctx.user.name, action: "update", entity: "user", entityId: ctx.user.id, summary: ownerOnDesktop ? "Password changed by Owner on desktop (no current password)" : "Password changed" });
     }
     return NextResponse.json({ ok: true });
   }

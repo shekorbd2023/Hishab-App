@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 
@@ -9,6 +9,10 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("reset")) setNotice("Password changed. Log in with your new password. / পাসওয়ার্ড বদলানো হয়েছে।");
+  }, []);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -39,8 +43,12 @@ export default function LoginPage() {
           <label className="label">Email</label>
           <input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
           <div style={{ height: ".75rem" }} />
-          <label className="label">Password</label>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+            <label className="label">Password</label>
+            <Link href="/forgot-password" className="link" style={{ fontSize: ".8rem" }}>Forgot password?</Link>
+          </div>
           <input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+          {notice && <p style={{ color: "var(--green, #16a34a)", fontSize: ".85rem", marginTop: ".75rem" }}>{notice}</p>}
           {err && <p style={{ color: "var(--red)", fontSize: ".85rem", marginTop: ".75rem" }}>{err}</p>}
           <button className="btn btn-primary" style={{ width: "100%", justifyContent: "center", marginTop: "1.25rem" }} disabled={busy}>
             {busy ? "…" : "Log In"}

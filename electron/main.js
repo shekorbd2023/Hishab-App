@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog } = require("electron");
+const { app, BrowserWindow, dialog, shell } = require("electron");
 const { fork } = require("child_process");
 const path = require("path");
 const http = require("http");
@@ -40,6 +40,15 @@ function startServer() {
   if (serverProc.stdout) serverProc.stdout.on("data", (d) => log("[srv] " + d.toString().trim()));
   if (serverProc.stderr) serverProc.stderr.on("data", (d) => log("[err] " + d.toString().trim()));
   serverProc.on("error", (e) => log("fork error: " + e.message));
+  // Forgot-password: the server asks us to show the reset-code file in Explorer.
+  serverProc.on("message", (m) => {
+    try {
+      if (!m || m.type !== "hishab:reveal-reset-file" || typeof m.path !== "string") return;
+      const want = path.resolve(m.path), dataDir = path.resolve(app.getPath("userData"));
+      if (path.dirname(want) !== dataDir || path.basename(want) !== "PASSWORD-RESET-CODE.txt") return;
+      shell.showItemInFolder(want);
+    } catch (e) { log("reveal failed: " + e.message); }
+  });
   serverProc.on("exit", (c, s) => log("server exit code=" + c + " sig=" + s));
 }
 

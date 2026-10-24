@@ -10,6 +10,8 @@ import { SCHEMA_SQL, MIGRATIONS } from "./schema";
 const isBuild = process.env.NEXT_PHASE === "phase-production-build";
 
 const dataDir = process.env.SMS_DATA_DIR || path.join(process.cwd(), "data");
+/** Folder that holds hishab.db (the desktop app's userData folder). */
+export const DATA_DIR = dataDir;
 if (!isBuild && !fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }
