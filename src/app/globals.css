@@ -394,10 +394,49 @@ html[data-splash="seen"] .hs-splash { display: none; }
 .sc-title { font-weight: 700; font-size: 13px; margin-bottom: .4rem; color: var(--brand-dark); }
 .sc-row { display: flex; align-items: center; justify-content: space-between; padding: .42rem 0; border-bottom: 1px dashed var(--border); font-size: 13px; }
 @media (max-width: 640px) { .sc-grid { grid-template-columns: 1fr; } .hs-pname { display: none; } }
+.hs-bnav, .hs-backdrop { display: none; }
 @media (max-width: 800px) {
-  .hs-side { position: fixed; left: 0; top: 0; box-shadow: var(--shadow-pop); }
-  .hs-shell:not(.mini) .hs-body { margin-left: 0; }
-  .hs-shell.mini .hs-side { width: 0; padding: 0; border: 0; overflow: hidden; }
+  /* Sidebar becomes an off-canvas drawer, closed by default. */
+  .hs-side { position: fixed; left: 0; top: 0; bottom: 0; height: 100dvh; width: min(280px, 84vw); z-index: 80; box-shadow: var(--shadow-pop); transform: translateX(-105%); transition: transform .2s ease; }
+  .hs-shell.drawer .hs-side { transform: none; }
+  .hs-backdrop { display: block; position: fixed; inset: 0; z-index: 75; background: rgba(15, 23, 42, .45); }
+  .hs-top { height: 52px; padding: 0 .5rem; gap: .15rem; }
+  .hs-kb { display: none; }
+  .hs-lang { height: 32px; padding: 0 .45rem; }
+  .hs-main { padding: .85rem .75rem calc(76px + env(safe-area-inset-bottom)); }
+  /* Bottom quick bar */
+  .hs-bnav { display: grid; grid-template-columns: repeat(5, 1fr); align-items: end; position: fixed; left: 0; right: 0; bottom: 0; z-index: 60;
+    height: calc(62px + env(safe-area-inset-bottom)); padding: 0 .25rem env(safe-area-inset-bottom); background: var(--card); border-top: 1px solid var(--border); box-shadow: 0 -4px 14px rgba(0,0,0,.05); }
+  .hs-bnav a { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; height: 62px; font-size: 10.5px; font-weight: 600; color: var(--muted); text-decoration: none; min-width: 0; }
+  .hs-bnav a span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hs-bnav a.on { color: var(--brand); }
+  .hs-bnav .hs-bnav-add { justify-self: center; width: 52px; height: 52px; margin-bottom: 18px; border-radius: 50%; background: var(--brand); color: #fff; box-shadow: 0 6px 16px color-mix(in srgb, var(--brand) 45%, transparent); }
+  /* Comfortable tap targets and no iOS zoom on focus */
+  .input, select.input, textarea.input { font-size: 16px; min-height: 42px; }
+  .btn { min-height: 38px; }
+}
+@media print { .hs-bnav, .hs-backdrop { display: none !important; } }
+/* Document lists (sales, purchase, quotations, returns) turn into tappable cards on phones. */
+.dl-mlabel { display: none; }
+@media (max-width: 640px) {
+  .m-hide { display: none !important; }
+  .page-head > .row { flex-wrap: wrap; }
+  .page-title { font-size: 1.05rem; }
+  table.tbl th, table.tbl td { padding: .65rem .6rem; }
+}
+@media (max-width: 640px) {
+  .dl-tbl thead { display: none; }
+  .dl-tbl, .dl-tbl tbody { display: block; }
+  .dl-tbl tbody tr.clickable { display: grid; grid-template-columns: 1fr auto; grid-template-areas: "party total" "no status" "date unpaid"; column-gap: .75rem; row-gap: .2rem; padding: .75rem .9rem; border-bottom: 1px solid var(--border); }
+  .dl-tbl tbody tr.clickable td { padding: 0; border: 0; background: none !important; }
+  .dl-tbl td.dl-party { grid-area: party; font-weight: 600; font-size: 14px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dl-tbl td.dl-total { grid-area: total; font-size: 14px; }
+  .dl-tbl td.dl-no { grid-area: no; font-size: 12px; color: var(--muted); }
+  .dl-tbl td.dl-date { grid-area: date; font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .dl-tbl td.dl-status { grid-area: status; justify-self: end; }
+  .dl-tbl td.dl-unpaid { grid-area: unpaid; font-size: 12px; }
+  .dl-tbl td.dl-unpaid.dl-zero, .dl-tbl td.dl-act { display: none; }
+  .dl-mlabel { display: inline; font-weight: 500; }
 }
 @media print { .hs-side, .hs-top { display: none !important; } .hs-main { padding: 0 !important; background: #fff !important; } }
 
@@ -773,6 +812,22 @@ html[data-splash="seen"] .hs-splash { display: none; }
   .de-right { border-left: 0; padding-left: 0; border-top: 1px solid var(--border); padding-top: 1rem; }
   .de-sum { width: 100%; }
   .de-foot { flex-direction: column; align-items: stretch; }
+}
+@media (max-width: 640px) {
+  /* Each bill line becomes a small card: item name on top, then qty / rate / amount, then discount. */
+  .de-tbl { min-width: 0; display: block; }
+  .de-tbl thead { display: none; }
+  .de-tbl tbody { display: block; }
+  .de-tbl tbody tr { display: grid; grid-template-columns: 1fr 1fr 1fr 36px; grid-template-areas: "name name name x" "qty rate amt amt" "dsc dsc dsc dsc"; gap: .45rem .5rem; padding: .75rem .8rem; border-bottom: 1px solid var(--border); }
+  .de-tbl tbody td { padding: 0 !important; border: 0; display: block; min-width: 0; }
+  .de-tbl td.de-sn { display: none; }
+  .de-tbl td.de-name { grid-area: name; } .de-tbl td.de-x { grid-area: x; align-self: center; }
+  .de-tbl td.de-qty { grid-area: qty; } .de-tbl td.de-rate { grid-area: rate; } .de-tbl td.de-amt { grid-area: amt; text-align: left; }
+  .de-tbl td.de-dsc { grid-area: dsc; }
+  .de-tbl td[data-l]::before { content: attr(data-l); display: block; font-size: 11px; font-weight: 600; color: var(--muted); margin-bottom: .2rem; }
+  .de-tbl tr.de-ghost td[data-l] { opacity: .75; }
+  .de-scan { min-width: 0; width: 100%; }
+  .de-foot { bottom: calc(66px + env(safe-area-inset-bottom)); }
 }
 .dl-strip { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; font-size: 13px; color: var(--muted); margin: .2rem 0 .7rem; }
 .dl-strip b { color: var(--text); }

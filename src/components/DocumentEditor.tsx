@@ -275,7 +275,7 @@ export default function DocumentEditor({
           {title}
           <Link href="/settings/features/transactions" className="btn btn-icon btn-sm btn-ghost" title="Transaction settings" aria-label="Transaction settings"><Icon name="settings" size={16} /></Link>
         </div>
-        <div className="row sub" style={{ gap: ".75rem" }}>
+        <div className="row sub m-hide" style={{ gap: ".75rem" }}>
           <span><span className="kbd">Enter</span> next field</span>
           <span><span className="kbd">Ctrl</span>+<span className="kbd">S</span> save</span>
         </div>
@@ -345,8 +345,8 @@ export default function DocumentEditor({
                 const amount = L.qty > 0 ? Math.max(0, base - (L.discountType === "percent" ? (base * (L.discountValue || 0)) / 100 : L.discountValue || 0)) : 0;
                 return (
                   <tr key={l.key} className={isLast ? "de-ghost" : ""}>
-                    <td className="text-muted">{i + 1}</td>
-                    <td>
+                    <td className="text-muted de-sn">{i + 1}</td>
+                    <td className="de-name">
                       <div data-name={l.key}>
                         <Picker
                           value={l.itemId} options={itemOpts} onChange={(id) => pickItem(l.key, id)}
@@ -355,15 +355,15 @@ export default function DocumentEditor({
                       </div>
                       {warn && <div className={`de-warn ${warn.level}`}><Icon name="info" size={12} />{warn.text}</div>}
                     </td>
-                    <td>
+                    <td className="de-qty" data-l="Qty">
                       <div className="de-sfx">
                         <input data-qty={l.key} className="input" inputMode="decimal" value={l.qty} placeholder="0"
                           onChange={(e) => setLine(l.key, { qty: e.target.value })} />
                         {l.unit && <span>{l.unit.toUpperCase()}</span>}
                       </div>
                     </td>
-                    <td><input className="input" inputMode="decimal" value={l.rate} placeholder="0" onChange={(e) => setLine(l.key, { rate: e.target.value })} /></td>
-                    <td>
+                    <td className="de-rate" data-l="Rate"><input className="input" inputMode="decimal" value={l.rate} placeholder="0" onChange={(e) => setLine(l.key, { rate: e.target.value })} /></td>
+                    <td className="de-dsc" data-l="Discount">
                       <div className="de-disc">
                         <div className="de-sfx"><input className="input" inputMode="decimal" value={pctVal} placeholder="0"
                           onChange={(e) => setLine(l.key, { discMode: "percent", discPct: e.target.value, discTk: "" })} /><span>%</span></div>
@@ -371,7 +371,7 @@ export default function DocumentEditor({
                           onChange={(e) => setLine(l.key, { discMode: "flat", discTk: e.target.value, discPct: "" })} /><span>Tk.</span></div>
                       </div>
                     </td>
-                    <td className="num">
+                    <td className="num de-amt" data-l="Amount">
                       {/* Karbar: the amount is editable — typing it back-calculates the rate (e.g. 0.25 × ? = 190 → rate 760). */}
                       <div className="de-sfx de-amtin">
                         <input data-amt={l.key} className="input" inputMode="decimal" placeholder="0"
@@ -382,7 +382,7 @@ export default function DocumentEditor({
                         <span>Tk.</span>
                       </div>
                     </td>
-                    <td>
+                    <td className="de-x">
                       {!isLast && (
                         <button type="button" className="btn btn-icon btn-sm btn-ghost de-del" onClick={() => removeLine(l.key)} title="Remove Item" aria-label="Remove Item">
                           <Icon name="trash" size={15} />

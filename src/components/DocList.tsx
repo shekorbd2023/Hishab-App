@@ -148,11 +148,11 @@ export default function DocList({ kind, rows: initial, prefix = "" }: { kind: Do
               <tr key={r.id} className="clickable" onClick={() => router.push(`/doc/${r.id}`)}>
                 <td className="dl-no">{prefix}{r.number}</td>
                 <td className="dl-party">{r.party || <span className="text-muted">{meta.cashLabel}</span>}</td>
-                <td>{fmtDate(r.date)}</td>
-                {!isQuote && <td><StatusPill status={r.status} /></td>}
-                <td className="num" style={{ fontWeight: 600 }}>{tk(r.total)}</td>
-                {!isQuote && <td className="num">{r.unpaid > 0.004 ? <span className="neg">{tk(r.unpaid)}</span> : <span className="text-muted">--</span>}</td>}
-                <td onClick={(e) => e.stopPropagation()}>
+                <td className="dl-date">{fmtDate(r.date)}</td>
+                {!isQuote && <td className="dl-status"><StatusPill status={r.status} /></td>}
+                <td className="num dl-total" style={{ fontWeight: 600 }}>{tk(r.total)}</td>
+                {!isQuote && <td className={`num dl-unpaid ${r.unpaid > 0.004 ? "" : "dl-zero"}`}>{r.unpaid > 0.004 ? <span className="neg"><span className="dl-mlabel">Unpaid </span>{tk(r.unpaid)}</span> : <span className="text-muted">--</span>}</td>}
+                <td className="dl-act" onClick={(e) => e.stopPropagation()}>
                   <div className="dl-act">
                     <Link href={`/doc/${r.id}`} className="btn btn-icon btn-sm btn-ghost" title={`Preview ${meta.single}`} aria-label="Preview"><Icon name="eye" size={16} /></Link>
                     <MoreButton items={menu(r)} />

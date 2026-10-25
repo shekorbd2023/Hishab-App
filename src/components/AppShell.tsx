@@ -97,7 +97,11 @@ export default function AppShell({
   const { t, locale, setLocale } = useT();
   const pathname = usePathname() || "/";
   const router = useRouter();
-  const [mini, setMini] = useState(false);
+  const [miniPref, setMini] = useState(false);
+  // Phones/tablets: the sidebar is an off-canvas drawer (closed by default) instead of a mini rail.
+  const [phone, setPhone] = useState(false);
+  const [drawer, setDrawer] = useState(false);
+  const mini = miniPref && !phone;
   const [scOpen, setScOpen] = useState(false);
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [theme, setTheme] = useState<ThemeChoice>("light");
@@ -105,7 +109,15 @@ export default function AppShell({
   useEffect(() => {
     try { setMini(localStorage.getItem("hishab_sidebar") === "mini"); } catch { /* ignore */ }
     setTheme(readTheme());
+    const mq = window.matchMedia("(max-width: 800px)");
+    const sync = () => { setPhone(mq.matches); if (!mq.matches) setDrawer(false); };
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
   }, []);
+
+  // Close the phone drawer whenever the page changes.
+  useEffect(() => { setDrawer(false); }, [pathname]);
 
   // Auto-open the submenu that contains the active route.
   useEffect(() => {
@@ -115,6 +127,7 @@ export default function AppShell({
   }, [pathname]);
 
   const toggleSidebar = useCallback(() => {
+    if (window.matchMedia("(max-width: 800px)").matches) { setDrawer((d) => !d); return; }
     setMini((m) => {
       try { localStorage.setItem("hishab_sidebar", m ? "full" : "mini"); } catch { /* ignore */ }
       return !m;
@@ -134,10 +147,11 @@ export default function AppShell({
   function pickTheme(c: ThemeChoice) { applyTheme(c); setTheme(c); }
 
   return (
-    <div className={`hs-shell ${mini ? "mini" : ""}`}>
+    <div className={`hs-shell ${mini ? "mini" : ""} ${drawer ? "drawer" : ""}`}>
       <Splash businessName={businessName} businessLogo={businessLogo} />
       <Shortcuts open={scOpen} setOpen={setScOpen} toggleSidebar={toggleSidebar} />
 
+      {drawer && <div className="hs-backdrop" onClick={() => setDrawer(false)} aria-hidden />}
       <aside className="hs-side scroll-thin">
         <Link href="/dashboard" className="hs-brand" title="Hishab">
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -207,7 +221,7 @@ export default function AppShell({
             <Icon name="swap" size={13} style={{ color: "var(--muted)" }} />
           </button>
 
-          <button type="button" className="btn btn-icon btn-ghost" onClick={() => setScOpen(true)} title={`${t("keyboard_shortcuts")} (Shift+K)`} aria-label="Keyboard shortcuts">
+          <button type="button" className="btn btn-icon btn-ghost hs-kb" onClick={() => setScOpen(true)} title={`${t("keyboard_shortcuts")} (Shift+K)`} aria-label="Keyboard shortcuts">
             <Icon name="keyboard" size={19} />
           </button>
 
@@ -256,6 +270,15 @@ export default function AppShell({
           </Dropdown>
         </header>
         <main className="hs-main">{children}</main>
+
+        {/* Phone bottom bar: the most-used screens one tap away. Hidden above 800px. */}
+        <nav className="hs-bnav" aria-label="Quick navigation">
+          <Link href="/dashboard" className={pathname.startsWith("/dashboard") ? "on" : ""}><Icon name="grid" size={20} /><span>{t("dashboard")}</span></Link>
+          <Link href="/sales-invoices" className={pathname === "/sales-invoices" ? "on" : ""}><Icon name="tag" size={20} /><span>{t("sales")}</span></Link>
+          <Link href="/sales-invoices/create" className="hs-bnav-add" aria-label={t("add_sales")}><Icon name="plus" size={24} stroke={2.4} /></Link>
+          <Link href="/parties" className={pathname.startsWith("/parties") ? "on" : ""}><Icon name="users" size={20} /><span>{t("parties")}</span></Link>
+          <Link href="/inventory" className={pathname.startsWith("/inventory") ? "on" : ""}><Icon name="box" size={20} /><span>{t("inventory")}</span></Link>
+        </nav>
       </div>
     </div>
   );

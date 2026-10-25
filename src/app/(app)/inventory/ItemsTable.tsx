@@ -75,9 +75,9 @@ export default function ItemsTable({ items, categories }: { items: ItemRow[]; ca
           <Link href="/settings/features/inventory" className="btn btn-icon btn-sm btn-ghost" title="Inventory settings"><Icon name="settings" size={16} /></Link>
         </div>
         <div className="row" style={{ gap: ".5rem" }}>
-          <Link className="btn" href="/tools/barcode"><Icon name="barcode" size={15} />Barcode</Link>
-          <button className="btn" onClick={exportCsv}><Icon name="download" size={15} />Download</button>
-          <Link className="btn" href="/import/items"><Icon name="import" size={15} />Import Items</Link>
+          <Link className="btn m-hide" href="/tools/barcode"><Icon name="barcode" size={15} />Barcode</Link>
+          <button className="btn m-hide" onClick={exportCsv}><Icon name="download" size={15} />Download</button>
+          <Link className="btn m-hide" href="/import/items"><Icon name="import" size={15} />Import Items</Link>
           <input ref={fileRef} type="file" accept=".csv" hidden onChange={onImport} />
           <SplitButton label="Add New Item" icon="plus" href="/inventory/add"
             items={[{ label: "Import Items (Excel)", icon: "import", href: "/import/items" }, { label: "Import CSV", icon: "upload", onClick: () => fileRef.current?.click() }]} />
@@ -106,8 +106,8 @@ export default function ItemsTable({ items, categories }: { items: ItemRow[]; ca
         <table className="tbl">
           <thead>
             <tr>
-              <th>Item Name</th><th>Type</th><th>Category</th><th>Item Code</th>
-              <th className="num">Sales Price</th><th className="num">Purchase Price</th><th className="num">Quantity</th>
+              <th>Item Name</th><th className="m-hide">Type</th><th className="m-hide">Category</th><th className="m-hide">Item Code</th>
+              <th className="num">Sales Price</th><th className="num m-hide">Purchase Price</th><th className="num">Quantity</th>
               <th style={{ width: 56 }} />
             </tr>
           </thead>
@@ -122,11 +122,11 @@ export default function ItemsTable({ items, categories }: { items: ItemRow[]; ca
                       <b style={{ fontWeight: 600 }}>{it.name}</b>
                     </div>
                   </td>
-                  <td>{it.type}</td>
-                  <td>{it.category || <span className="text-muted">--</span>}</td>
-                  <td>{it.code || <span className="text-muted">--</span>}</td>
+                  <td className="m-hide">{it.type}</td>
+                  <td className="m-hide">{it.category || <span className="text-muted">--</span>}</td>
+                  <td className="m-hide">{it.code || <span className="text-muted">--</span>}</td>
                   <td className="num">{tk(it.sales_price)}</td>
-                  <td className="num">{tk(it.purchase_price)}</td>
+                  <td className="num m-hide">{tk(it.purchase_price)}</td>
                   <td className="num" style={{ fontWeight: 600 }}>
                     {it.type === "Service" ? <span className="text-muted">--</span> : (
                       <span className={st === "out" ? "neg" : st === "low" ? "amber" : ""}>{fq(it.stock)} {(it.unit || "pcs").toUpperCase()}</span>

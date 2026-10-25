@@ -60,5 +60,11 @@ See `DEPLOY.md`.
   "change password without the current one" (settings `op: account`) work ONLY for local requests
   (`isLocalRequest`: Host, x-forwarded-host and every x-forwarded-for entry must be loopback — Next fills those itself for direct local requests) — never on the web deploy.
 
+## Mobile layout (v0.3.2)
+- ≤800px: sidebar is an off-canvas drawer (`.hs-shell.drawer`, closed by default, closes on route change);
+  the desktop "mini" preference is ignored on phones. Bottom quick bar `.hs-bnav` (Dashboard, Sales, +, Parties, Inventory).
+- ≤640px: `.m-hide` hides secondary columns/buttons; document lists (`.dl-tbl`) and bill lines (`.de-tbl`)
+  render as cards via CSS grid-template-areas — keep the `dl-*` / `de-*` cell classes when editing those tables.
+
 ## Desktop releases
 Bump both package.json versions, push tag `vX.Y.Z` → installed apps auto-update (see DEPLOY.md).
