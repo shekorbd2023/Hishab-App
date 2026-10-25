@@ -26,7 +26,7 @@ function client(): Client {
   if (isBuild) {
     _client = createClient({ url: ":memory:" });
   } else if (remoteUrl) {
-    _client = createClient({ url: remoteUrl, authToken: process.env.TURSO_AUTH_TOKEN || process.env.LIBSQL_AUTH_TOKEN });
+    _client = createClient({ url: remoteUrl, authToken: process.env.TURSO_AUTH_TOKEN || process.env.TURSO_DATABASE_TURSO_AUTH_TOKEN || process.env.LIBSQL_AUTH_TOKEN });
   } else {
     if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
     _client = createClient({ url: "file:" + path.join(dataDir, "hishab.db") });

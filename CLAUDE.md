@@ -5,7 +5,8 @@ sales/purchase, POS, accounts, expenses, reports). Bilingual EN/BN, BDT (`Tk.`).
 
 ## Stack
 - Next.js 15 (App Router, TypeScript), `output: "standalone"`.
-- DB: **`@libsql/client`** (async). Online: `TURSO_DATABASE_URL` + `TURSO_AUTH_TOKEN` (Vercel + Turso).
+- DB: **`@libsql/client`** (async). Online: `TURSO_DATABASE_URL` + `TURSO_DATABASE_TURSO_AUTH_TOKEN` (set by the Vercel Turso
+  integration; `TURSO_AUTH_TOKEN` also accepted). Vercel project `hishab` (team shekorbd2023s-projects), region bom1.
   Local/dev/tests: file `<SMS_DATA_DIR>/hishab.db` (defaults to `./data`). Schema is created/migrated on the
   first query of each cold start (`ready()` in `src/lib/db.ts`).
 - All DB helpers are async: `await all/get/run`, `await tx(async () => …)` (AsyncLocalStorage routes helpers
