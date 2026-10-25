@@ -8,5 +8,5 @@ export const dynamic = "force-dynamic";
 export default async function Page() {
   const ctx = await requireCtx();
   if (!ctx) redirect("/login");
-  return <CashbookClient kind="expense" {...cashbookData(ctx.business.id, "expense")} />;
+  return <CashbookClient kind="expense" {...(await cashbookData(ctx.business.id, "expense"))} />;
 }

@@ -2,6 +2,13 @@
 // Money is stored as REAL (BDT). IDs are UUID text. Timestamps are ISO strings.
 
 export const SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS restore_snapshots (
+  id TEXT PRIMARY KEY,
+  business_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  json TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   email TEXT UNIQUE NOT NULL,

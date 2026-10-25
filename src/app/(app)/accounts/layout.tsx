@@ -9,5 +9,5 @@ export const dynamic = "force-dynamic";
 export default async function AccountsLayout({ children }: { children: React.ReactNode }) {
   const ctx = await requireCtx();
   if (!ctx) redirect("/login");
-  return <AccountsShell accounts={loadAccounts(ctx.business.id)}>{children}</AccountsShell>;
+  return <AccountsShell accounts={(await loadAccounts(ctx.business.id))}>{children}</AccountsShell>;
 }

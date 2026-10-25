@@ -13,14 +13,14 @@ export default async function PartiesLayout({ children }: { children: React.Reac
   const ctx = await requireCtx();
   if (!ctx) redirect("/login");
   const bid = ctx.business.id;
-  const bal = partyBalances(bid);
-  const parties: PartyRow[] = all<Omit<PartyRow, "balance">>(
-    "SELECT id, name, phone, type, category, photo, created_at FROM parties WHERE business_id = ? ORDER BY created_at DESC, name COLLATE NOCASE",
-    [bid]
-  ).map((p) => ({ ...p, balance: Math.round((bal[p.id] ?? 0) * 100) / 100 }));
+  const bal = (await partyBalances(bid));
+  const parties: PartyRow[] = (await all<Omit<PartyRow, "balance">>(
+      "SELECT id, name, phone, type, category, photo, created_at FROM parties WHERE business_id = ? ORDER BY created_at DESC, name COLLATE NOCASE",
+      [bid]
+    )).map((p) => ({ ...p, balance: Math.round((bal[p.id] ?? 0) * 100) / 100 }));
   return (
     <Suspense>
-      <PartiesShell parties={parties} categories={partyCategories(bid)}>{children}</PartiesShell>
+      <PartiesShell parties={parties} categories={(await partyCategories(bid))}>{children}</PartiesShell>
     </Suspense>
   );
 }

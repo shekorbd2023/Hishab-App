@@ -9,7 +9,7 @@ export default async function ListPage({ kind }: { kind: DocKind }) {
   const ctx = await requireCtx();
   if (!ctx) redirect("/login");
   const bid = ctx.business.id;
-  const rows = listDocs(bid, kind);
-  const { prefix } = editorSettings(bid, kind);
+  const rows = (await listDocs(bid, kind));
+  const { prefix } = (await editorSettings(bid, kind));
   return <DocList kind={kind} rows={rows} prefix={prefix} />;
 }

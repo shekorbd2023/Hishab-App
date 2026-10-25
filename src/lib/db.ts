@@ -1,48 +1,64 @@
-import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import fs from "node:fs";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { createClient, type Client, type InStatement, type Transaction } from "@libsql/client";
 import { SCHEMA_SQL, MIGRATIONS } from "./schema";
 
-// ---- Build-safe DB (ship-app skill gotcha #1) --------------------------------
-// `next build` spawns many worker processes that each import this module and open
-// the same SQLite file, deadlocking on WAL. During the build phase, hand each
-// worker its own throwaway in-memory DB instead.
+/* ---- Database connection -------------------------------------------------------
+ * Online (Vercel): TURSO_DATABASE_URL + TURSO_AUTH_TOKEN point at the hosted libSQL/Turso database.
+ * Local (dev, tests, self-hosted): a SQLite file at <SMS_DATA_DIR>/hishab.db through the same client.
+ * Every helper is async. Inside tx(fn) all helpers automatically run on that transaction
+ * (AsyncLocalStorage), so callers never pass a transaction handle around. */
 const isBuild = process.env.NEXT_PHASE === "phase-production-build";
+const remoteUrl = process.env.TURSO_DATABASE_URL || process.env.LIBSQL_URL || "";
 
 const dataDir = process.env.SMS_DATA_DIR || path.join(process.cwd(), "data");
-/** Folder that holds hishab.db (the desktop app's userData folder). */
+/** Folder that holds hishab.db when running with a local file (desktop / self-hosted). */
 export const DATA_DIR = dataDir;
-if (!isBuild && !fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
+/** True when the data lives on the hosted database (no local files on this machine). */
+export const IS_REMOTE_DB = !!remoteUrl;
+
+let _client: Client | null = null;
+let _ready: Promise<void> | null = null;
+
+function client(): Client {
+  if (_client) return _client;
+  if (isBuild) {
+    _client = createClient({ url: ":memory:" });
+  } else if (remoteUrl) {
+    _client = createClient({ url: remoteUrl, authToken: process.env.TURSO_AUTH_TOKEN || process.env.LIBSQL_AUTH_TOKEN });
+  } else {
+    if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+    _client = createClient({ url: "file:" + path.join(dataDir, "hishab.db") });
+  }
+  return _client;
 }
 
-const dbPath = isBuild ? ":memory:" : path.join(dataDir, "hishab.db");
-
-let _db: DatabaseSync | null = null;
-
-function connect(): DatabaseSync {
-  const db = new DatabaseSync(dbPath);
-  db.exec("PRAGMA busy_timeout = 15000"); // set FIRST so later stmts wait on locks
-  if (!isBuild) {
-    try {
-      db.exec("PRAGMA journal_mode = WAL");
-    } catch {
-      /* ignore */
-    }
+/** Creates/migrates the schema once per process (cold start). */
+function ready(): Promise<void> {
+  if (!_ready) {
+    const p = init();
+    p.catch(() => { _ready = null; }); // let the next request retry after a failed cold start
+    _ready = p;
   }
-  db.exec("PRAGMA foreign_keys = ON");
+  return _ready;
+}
+
+async function init() {
+  const c = client();
+  if (!remoteUrl && !isBuild) {
+    for (const p of ["PRAGMA busy_timeout = 15000", "PRAGMA journal_mode = WAL"]) { try { await c.execute(p); } catch { /* ignore */ } }
+  }
+  try { await c.execute("PRAGMA foreign_keys = ON"); } catch { /* ignore */ }
   // Migrate older databases BEFORE running the schema (new indexes reference new columns).
   for (const [table, col, ddl] of MIGRATIONS) {
     try {
-      const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
-      if (cols.length > 0 && !cols.some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${ddl}`);
-    } catch {
-      /* ignore */
-    }
+      const cols = (await c.execute(`PRAGMA table_info(${table})`)).rows as unknown as { name: string }[];
+      if (cols.length > 0 && !cols.some((x) => x.name === col)) await c.execute(`ALTER TABLE ${table} ADD COLUMN ${col} ${ddl}`);
+    } catch { /* ignore */ }
   }
-  db.exec(SCHEMA_SQL);
-  if (!isBuild) runDataFixes(db);
-  return db;
+  await c.executeMultiple(SCHEMA_SQL);
+  if (!isBuild) await runDataFixes(c);
 }
 
 /* ---- One-time data fixes, tracked with PRAGMA user_version -------------------
@@ -58,70 +74,100 @@ const SHEKOR_UNITS: Record<string, string> = {
   "Plum honey": "KG", "Black seed Honey 1kg": "KG", "Shorisha Honey 1kg": "KG", "Sundarban Honey 1kg": "KG",
   "Maghi Shorishar Tel 1Litre": "LTR",
 };
-function runDataFixes(db: DatabaseSync) {
+async function runDataFixes(c: Client) {
   try {
-    const v = Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version) || 0;
+    const v = Number((await c.execute("PRAGMA user_version")).rows[0]?.user_version) || 0;
     if (v < 1) {
       const isDefault = "(unit IS NULL OR TRIM(unit) = '' OR LOWER(unit) IN ('pcs','pc','piece'))";
-      const upItem = db.prepare(`UPDATE items SET unit = ? WHERE name = ? AND ${isDefault}`);
-      const upLines = db.prepare(`UPDATE doc_items SET unit = ? WHERE name = ? AND ${isDefault}`);
-      db.exec("BEGIN");
-      for (const [name, unit] of Object.entries(SHEKOR_UNITS)) { upItem.run(unit, name); upLines.run(unit, name); }
-      db.exec("PRAGMA user_version = 1");
-      db.exec("COMMIT");
+      const stmts: InStatement[] = [];
+      for (const [name, unit] of Object.entries(SHEKOR_UNITS)) {
+        stmts.push({ sql: `UPDATE items SET unit = ? WHERE name = ? AND ${isDefault}`, args: [unit, name] });
+        stmts.push({ sql: `UPDATE doc_items SET unit = ? WHERE name = ? AND ${isDefault}`, args: [unit, name] });
+      }
+      await c.batch(stmts, "write");
+      await c.execute("PRAGMA user_version = 1");
     }
-  } catch {
-    try { db.exec("ROLLBACK"); } catch { /* ignore */ }
-  }
+  } catch { /* ignore */ }
 }
 
-export function getDb(): DatabaseSync {
-  if (!_db) _db = connect();
-  return _db;
-}
-
-// ---- Tiny query helpers ------------------------------------------------------
+// ---- Query helpers -------------------------------------------------------------
 type Row = Record<string, unknown>;
+type Value = string | number | bigint | null | ArrayBuffer | Uint8Array | boolean;
 
-// node:sqlite returns rows with a null prototype; normalize to plain objects so
-// they can be safely serialized / passed to Client Components.
-function plain<T>(row: unknown): T {
-  return { ...(row as object) } as T;
+const txStore = new AsyncLocalStorage<Transaction>();
+
+function norm(params: unknown[]): Value[] {
+  return params.map((v) => (v === undefined ? null : typeof v === "boolean" ? (v ? 1 : 0) : (v as Value)));
+}
+/** libSQL rows are array-like objects with column getters; turn them into plain JSON-safe objects. */
+function plain<T>(columns: string[], row: Record<string, unknown>): T {
+  const o: Record<string, unknown> = {};
+  for (const c of columns) { const v = row[c]; o[c] = typeof v === "bigint" ? Number(v) : v; }
+  return o as T;
+}
+async function exec(sql: string, params: unknown[]) {
+  const t = txStore.getStore();
+  if (t) return t.execute({ sql, args: norm(params) });
+  await ready();
+  return client().execute({ sql, args: norm(params) });
 }
 
-export function all<T = Row>(sql: string, params: unknown[] = []): T[] {
-  const stmt = getDb().prepare(sql);
-  return (stmt.all(...(params as never[])) as unknown[]).map((r) => plain<T>(r));
+export async function all<T = Row>(sql: string, params: unknown[] = []): Promise<T[]> {
+  const r = await exec(sql, params);
+  return r.rows.map((row) => plain<T>(r.columns, row as unknown as Record<string, unknown>));
 }
 
-export function get<T = Row>(sql: string, params: unknown[] = []): T | undefined {
-  const stmt = getDb().prepare(sql);
-  const r = stmt.get(...(params as never[]));
-  return r === undefined ? undefined : plain<T>(r);
+export async function get<T = Row>(sql: string, params: unknown[] = []): Promise<T | undefined> {
+  const r = await exec(sql, params);
+  return r.rows.length ? plain<T>(r.columns, r.rows[0] as unknown as Record<string, unknown>) : undefined;
 }
 
-export function run(
-  sql: string,
-  params: unknown[] = []
-): { changes: number; lastInsertRowid: number | bigint } {
-  const stmt = getDb().prepare(sql);
-  const r = stmt.run(...(params as never[]));
-  return { changes: Number(r.changes), lastInsertRowid: r.lastInsertRowid };
+export async function run(sql: string, params: unknown[] = []): Promise<{ changes: number; lastInsertRowid: number | bigint }> {
+  const r = await exec(sql, params);
+  return { changes: r.rowsAffected, lastInsertRowid: r.lastInsertRowid ?? 0 };
 }
 
-export function tx<T>(fn: () => T): T {
-  const db = getDb();
-  db.exec("BEGIN");
-  try {
-    const out = fn();
-    db.exec("COMMIT");
-    return out;
-  } catch (e) {
+/** Runs many statements atomically in ONE round trip (fast over the network). Not for use inside tx(). */
+export async function batchWrite(stmts: { sql: string; params?: unknown[] }[]): Promise<void> {
+  if (txStore.getStore()) throw new Error("batchWrite cannot run inside tx()");
+  await ready();
+  await client().batch(stmts.map((s) => ({ sql: s.sql, args: norm(s.params ?? []) })), "write");
+}
+
+/** Runs fn atomically. Nested tx() calls join the outer transaction.
+ * Write transactions are queued inside this process (one at a time), and a transaction that
+ * hits "database is locked" (another device/server instance writing at the same moment)
+ * is retried a few times with a short back-off before giving up. */
+let txQueue: Promise<unknown> = Promise.resolve();
+const isBusy = (e: unknown) => /SQLITE_BUSY|database is locked|SQLITE_LOCKED/i.test(String((e as { code?: string })?.code ?? "") + " " + String((e as Error)?.message ?? ""));
+
+export async function tx<T>(fn: () => Promise<T>): Promise<T> {
+  if (txStore.getStore()) return fn();
+  const turn = txQueue.then(() => runTx(fn), () => runTx(fn));
+  txQueue = turn.catch(() => undefined);
+  return turn;
+}
+
+async function runTx<T>(fn: () => Promise<T>): Promise<T> {
+  await ready();
+  for (let attempt = 0; ; attempt++) {
+    let t: Transaction;
     try {
-      db.exec("ROLLBACK");
-    } catch {
-      /* ignore */
+      t = await client().transaction("write");
+    } catch (e) {
+      if (isBusy(e) && attempt < 6) { await new Promise((r) => setTimeout(r, 120 * (attempt + 1))); continue; }
+      throw e;
     }
-    throw e;
+    try {
+      const out = await txStore.run(t, fn);
+      await t.commit();
+      return out;
+    } catch (e) {
+      try { await t.rollback(); } catch { /* ignore */ }
+      if (isBusy(e) && attempt < 6) { await new Promise((r) => setTimeout(r, 120 * (attempt + 1))); continue; }
+      throw e;
+    } finally {
+      t.close();
+    }
   }
 }

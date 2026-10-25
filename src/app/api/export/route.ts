@@ -13,21 +13,21 @@ const TABLES = [
 const r2 = (n: number) => Math.round((n || 0) * 100) / 100;
 
 /** Computed snapshot (balances, stock, totals) added to the "Full JSON Business Report". */
-function computed(bid: string) {
-  const pb = partyBalances(bid);
-  const ab = accountBalances(bid);
-  const st = itemStocks(bid);
-  const parties = all<{ id: string; name: string; phone: string | null; type: string }>("SELECT id, name, phone, type FROM parties WHERE business_id=? ORDER BY name COLLATE NOCASE", [bid]);
-  const accounts = all<{ id: string; name: string; type: string }>("SELECT id, name, type FROM accounts WHERE business_id=? ORDER BY created_at", [bid]);
-  const items = all<{ id: string; name: string; unit: string | null; purchase_price: number; sales_price: number }>("SELECT id, name, unit, purchase_price, sales_price FROM items WHERE business_id=? ORDER BY name COLLATE NOCASE", [bid]);
+async function computed(bid: string) {
+  const pb = (await partyBalances(bid));
+  const ab = (await accountBalances(bid));
+  const st = (await itemStocks(bid));
+  const parties = (await all<{ id: string; name: string; phone: string | null; type: string }>("SELECT id, name, phone, type FROM parties WHERE business_id=? ORDER BY name COLLATE NOCASE", [bid]));
+  const accounts = (await all<{ id: string; name: string; type: string }>("SELECT id, name, type FROM accounts WHERE business_id=? ORDER BY created_at", [bid]));
+  const items = (await all<{ id: string; name: string; unit: string | null; purchase_price: number; sales_price: number }>("SELECT id, name, unit, purchase_price, sales_price FROM items WHERE business_id=? ORDER BY name COLLATE NOCASE", [bid]));
   let receivable = 0, payable = 0;
   for (const v of Object.values(pb)) { if (v > 0) receivable += v; else payable -= v; }
-  const sales = sumDocuments(bid, "sales_invoice") - sumDocuments(bid, "sales_return");
-  const purchases = sumDocuments(bid, "purchase_bill") - sumDocuments(bid, "purchase_return");
-  const expenses = sumExpenses(bid), income = sumIncomes(bid);
-  const expenseByCategory = all<{ category: string | null; count: number; amount: number }>("SELECT category, COUNT(*) count, SUM(amount) amount FROM expenses WHERE business_id=? GROUP BY category ORDER BY amount DESC", [bid]);
-  const monthly = all<{ month: string; sales: number; invoices: number }>(
-    "SELECT substr(date,1,7) month, SUM(total) sales, COUNT(*) invoices FROM documents WHERE business_id=? AND kind='sales_invoice' GROUP BY month ORDER BY month", [bid]);
+  const sales = (await sumDocuments(bid, "sales_invoice")) - (await sumDocuments(bid, "sales_return"));
+  const purchases = (await sumDocuments(bid, "purchase_bill")) - (await sumDocuments(bid, "purchase_return"));
+  const expenses = (await sumExpenses(bid)), income = (await sumIncomes(bid));
+  const expenseByCategory = (await all<{ category: string | null; count: number; amount: number }>("SELECT category, COUNT(*) count, SUM(amount) amount FROM expenses WHERE business_id=? GROUP BY category ORDER BY amount DESC", [bid]));
+  const monthly = (await all<{ month: string; sales: number; invoices: number }>(
+      "SELECT substr(date,1,7) month, SUM(total) sales, COUNT(*) invoices FROM documents WHERE business_id=? AND kind='sales_invoice' GROUP BY month ORDER BY month", [bid]));
   return {
     totals: {
       receivable: r2(receivable), payable: r2(payable), cash_and_bank: r2(Object.values(ab).reduce((a, b) => a + b, 0)),
@@ -54,8 +54,8 @@ export async function GET(req: Request) {
   for (const tbl of TABLES) {
     try {
       data[tbl] = tbl === "doc_items"
-        ? all("SELECT di.* FROM doc_items di JOIN documents d ON d.id = di.document_id WHERE d.business_id = ?", [bid])
-        : all(`SELECT * FROM ${tbl} WHERE business_id = ?`, [bid]);
+        ? (await all("SELECT di.* FROM doc_items di JOIN documents d ON d.id = di.document_id WHERE d.business_id = ?", [bid]))
+        : (await all(`SELECT * FROM ${tbl} WHERE business_id = ?`, [bid]));
     } catch { data[tbl] = []; }
   }
   const b = ctx.business as unknown as Record<string, unknown>;
@@ -64,7 +64,7 @@ export async function GET(req: Request) {
     version: 1,
     exported_at: new Date().toISOString(),
     business: { id: bid, name: ctx.business.name, currency: ctx.business.currency, currency_symbol: ctx.business.currency_symbol, phone: b.phone ?? null, address: b.address ?? null, email: b.email ?? null },
-    ...(withReport ? { report: computed(bid) } : {}),
+    ...(withReport ? { report: (await computed(bid)) } : {}),
     data,
   };
   const base = ctx.business.name.replace(/[^a-z0-9]/gi, "_");

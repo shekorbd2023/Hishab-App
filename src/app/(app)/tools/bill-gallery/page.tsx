@@ -10,11 +10,11 @@ export default async function BillGallery() {
   const ctx = await requireCtx();
   if (!ctx) redirect("/login");
   const sym = ctx.business.currency_symbol;
-  const rows = all<{ id: string; number: number; date: string; total: number; status: string; kind: string; pname: string | null }>(
-    `SELECT d.id, d.number, d.date, d.total, d.status, d.kind, p.name pname FROM documents d
+  const rows = (await all<{ id: string; number: number; date: string; total: number; status: string; kind: string; pname: string | null }>(
+      `SELECT d.id, d.number, d.date, d.total, d.status, d.kind, p.name pname FROM documents d
      LEFT JOIN parties p ON p.id = d.party_id
      WHERE d.business_id = ? AND d.kind IN ('sales_invoice','purchase_bill') ORDER BY d.date DESC, d.number DESC LIMIT 60`, [ctx.business.id]
-  );
+    ));
   return (
     <div>
       <h1 style={{ fontSize: "1.5rem", fontWeight: 800, marginBottom: "1rem" }}>Bill Gallery</h1>

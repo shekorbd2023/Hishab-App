@@ -8,6 +8,6 @@ export const dynamic = "force-dynamic";
 export default async function ImportItemsPage() {
   const ctx = await requireCtx();
   if (!ctx) redirect("/login");
-  const names = all<{ name: string }>("SELECT name FROM items WHERE business_id=?", [ctx.business.id]).map((r) => r.name);
+  const names = (await all<{ name: string }>("SELECT name FROM items WHERE business_id=?", [ctx.business.id])).map((r) => r.name);
   return <ImportWizard kind="items" existing={names} />;
 }

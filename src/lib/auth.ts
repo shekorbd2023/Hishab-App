@@ -20,10 +20,10 @@ export type Business = {
 };
 export type Member = { role: string; permissions: string | null; status: string };
 
-export function createSession(userId: string): string {
+export async function createSession(userId: string): Promise<string> {
   const token = randomBytes(32).toString("hex");
   const expires = new Date(Date.now() + 1000 * 60 * 60 * 24 * 60).toISOString(); // 60d
-  run("INSERT INTO sessions (token, user_id, expires_at) VALUES (?,?,?)", [token, userId, expires]);
+  (await run("INSERT INTO sessions (token, user_id, expires_at) VALUES (?,?,?)", [token, userId, expires]));
   return token;
 }
 
@@ -31,22 +31,22 @@ export async function getCurrentUser(): Promise<User | null> {
   const jar = await cookies();
   const token = jar.get(SESSION_COOKIE)?.value;
   if (!token) return null;
-  const s = get<{ user_id: string; expires_at: string }>(
-    "SELECT user_id, expires_at FROM sessions WHERE token = ?",
-    [token]
-  );
+  const s = (await get<{ user_id: string; expires_at: string }>(
+      "SELECT user_id, expires_at FROM sessions WHERE token = ?",
+      [token]
+    ));
   if (!s || new Date(s.expires_at) < new Date()) return null;
-  const u = get<User>("SELECT id, email, name FROM users WHERE id = ?", [s.user_id]);
+  const u = (await get<User>("SELECT id, email, name FROM users WHERE id = ?", [s.user_id]));
   return u ?? null;
 }
 
 export async function destroySession(): Promise<void> {
   const jar = await cookies();
   const token = jar.get(SESSION_COOKIE)?.value;
-  if (token) run("DELETE FROM sessions WHERE token = ?", [token]);
+  if (token) (await run("DELETE FROM sessions WHERE token = ?", [token]));
 }
 
-export function businessesForUser(userId: string): (Business & { role: string })[] {
+export async function businessesForUser(userId: string): Promise<(Business & { role: string })[]> {
   return all<Business & { role: string }>(
     `SELECT b.*, m.role FROM businesses b
      JOIN business_members m ON m.business_id = b.id
@@ -59,7 +59,7 @@ export function businessesForUser(userId: string): (Business & { role: string })
 export async function getActiveBusiness(
   userId: string
 ): Promise<{ business: Business; role: string } | null> {
-  const list = businessesForUser(userId);
+  const list = (await businessesForUser(userId));
   if (list.length === 0) return null;
   const jar = await cookies();
   const wanted = jar.get(BUSINESS_COOKIE)?.value;
@@ -78,7 +78,7 @@ export async function requireCtx(): Promise<Ctx | null> {
   return { user, business: ab.business, role: ab.role };
 }
 
-export function getMember(businessId: string, userId: string): Member | undefined {
+export async function getMember(businessId: string, userId: string): Promise<Member | undefined> {
   return get<Member>(
     "SELECT role, permissions, status FROM business_members WHERE business_id = ? AND user_id = ?",
     [businessId, userId]
@@ -98,8 +98,8 @@ export function can(role: string, permissions: string | null, module: string, ac
 }
 
 /** Permission check for the current member in the active business. */
-export function allowed(ctx: Ctx, module: string, action: string): boolean {
-  const m = getMember(ctx.business.id, ctx.user.id);
+export async function allowed(ctx: Ctx, module: string, action: string): Promise<boolean> {
+  const m = (await getMember(ctx.business.id, ctx.user.id));
   return can(ctx.role, m?.permissions ?? null, module, action);
 }
 
@@ -107,9 +107,9 @@ export const ROLES = ["Owner", "Admin", "Partner", "Staff"] as const;
 export const isManager = (role: string) => role === "Owner" || role === "Admin" || role === "Partner";
 
 /** True when `id` is a row of `table` inside this business (guards cross-business references). */
-export function belongs(table: "parties" | "accounts" | "items" | "documents", id: unknown, businessId: string): boolean {
+export async function belongs(table: "parties" | "accounts" | "items" | "documents", id: unknown, businessId: string): Promise<boolean> {
   if (id === null || id === undefined || id === "") return true;
-  return !!get(`SELECT id FROM ${table} WHERE id = ? AND business_id = ?`, [String(id), businessId]);
+  return !!(await get(`SELECT id FROM ${table} WHERE id = ? AND business_id = ?`, [String(id), businessId]));
 }
 
 /* ---- Login throttling (in-memory, per email+IP) ---------------------------- */
@@ -138,42 +138,42 @@ export function cookieOpts(req: Request, httpOnly = true) {
   return { httpOnly, sameSite: "lax" as const, path: "/", maxAge: 60 * 60 * 24 * 60, secure: proto === "https" };
 }
 
-export function createBusinessForUser(ownerId: string, name: string): string {
+export async function createBusinessForUser(ownerId: string, name: string): Promise<string> {
   const id = uid();
   const now = nowIso();
-  run(
-    `INSERT INTO businesses (id, name, owner_id, currency, currency_symbol, created_at)
+  (await run(
+        `INSERT INTO businesses (id, name, owner_id, currency, currency_symbol, created_at)
      VALUES (?,?,?,?,?,?)`,
-    [id, name, ownerId, "BDT", "Tk.", now]
-  );
-  run(
-    `INSERT INTO business_members (id, business_id, user_id, role, status, joined_at)
+        [id, name, ownerId, "BDT", "Tk.", now]
+      ));
+  (await run(
+        `INSERT INTO business_members (id, business_id, user_id, role, status, joined_at)
      VALUES (?,?,?,?,?,?)`,
-    [uid(), id, ownerId, "Owner", "Accepted", now]
-  );
+        [uid(), id, ownerId, "Owner", "Accepted", now]
+      ));
   // seed defaults
-  run("INSERT INTO accounts (id, business_id, name, type, opening_balance, created_at) VALUES (?,?,?,?,?,?)", [
-    uid(), id, "Cash", "cash", 0, now,
-  ]);
+  (await run("INSERT INTO accounts (id, business_id, name, type, opening_balance, created_at) VALUES (?,?,?,?,?,?)", [
+        uid(), id, "Cash", "cash", 0, now,
+      ]));
   for (const u of ["pcs", "kg", "g", "litre", "box", "dozen"]) {
-    run("INSERT INTO units (id, business_id, name) VALUES (?,?,?)", [uid(), id, u]);
+    (await run("INSERT INTO units (id, business_id, name) VALUES (?,?,?)", [uid(), id, u]));
   }
   for (const c of ["Uncategorized", "Rent", "Utilities", "Salary", "Transport"]) {
-    run("INSERT INTO categories (id, business_id, kind, name) VALUES (?,?,?,?)", [uid(), id, "expense", c]);
+    (await run("INSERT INTO categories (id, business_id, kind, name) VALUES (?,?,?,?)", [uid(), id, "expense", c]));
   }
   return id;
 }
 
-export function nextDocNumber(businessId: string, kind: string): number {
-  const existing = get<{ value: number }>(
-    "SELECT value FROM counters WHERE business_id = ? AND kind = ?",
-    [businessId, kind]
-  );
+export async function nextDocNumber(businessId: string, kind: string): Promise<number> {
+  const existing = (await get<{ value: number }>(
+      "SELECT value FROM counters WHERE business_id = ? AND kind = ?",
+      [businessId, kind]
+    ));
   if (!existing) {
-    run("INSERT INTO counters (business_id, kind, value) VALUES (?,?,1)", [businessId, kind]);
+    (await run("INSERT INTO counters (business_id, kind, value) VALUES (?,?,1)", [businessId, kind]));
     return 1;
   }
   const next = existing.value + 1;
-  run("UPDATE counters SET value = ? WHERE business_id = ? AND kind = ?", [next, businessId, kind]);
+  (await run("UPDATE counters SET value = ? WHERE business_id = ? AND kind = ?", [next, businessId, kind]));
   return next;
 }

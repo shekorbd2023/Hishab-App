@@ -5,21 +5,24 @@ sales/purchase, POS, accounts, expenses, reports). Bilingual EN/BN, BDT (`Tk.`).
 
 ## Stack
 - Next.js 15 (App Router, TypeScript), `output: "standalone"`.
-- DB: **`node:sqlite`** (`DatabaseSync`), NOT Prisma/better-sqlite3. Data dir from
-  `SMS_DATA_DIR` (defaults to `./data`). File: `hishab.db`.
+- DB: **`@libsql/client`** (async). Online: `TURSO_DATABASE_URL` + `TURSO_AUTH_TOKEN` (Vercel + Turso).
+  Local/dev/tests: file `<SMS_DATA_DIR>/hishab.db` (defaults to `./data`). Schema is created/migrated on the
+  first query of each cold start (`ready()` in `src/lib/db.ts`).
+- All DB helpers are async: `await all/get/run`, `await tx(async () => …)` (AsyncLocalStorage routes helpers
+  inside tx to the transaction; nested tx joins; write txs are queued per process and retried on SQLITE_BUSY).
+  `batchWrite([...])` = many statements atomically in one round trip (restore uses it).
+  NEVER call a DB helper inside `.forEach/.some/.every/.filter` — use for…of or Promise.all.
 - Styling: Tailwind CSS v4 (`@tailwindcss/postcss`). Theme via CSS variables +
   `data-theme` on `<html>`.
 - Auth: email/password, scrypt hash, `sessions` table, `hishab_session` cookie.
 - No external UI/chart deps — charts are hand-rolled inline SVG.
 
 ## Commands
-- Local build (Node 22 needs the flag): `NODE_OPTIONS=--experimental-sqlite npm run build`
-- Dev: `NODE_OPTIONS=--experimental-sqlite npm run dev`
-- Production Docker pins **Node 24** where `node:sqlite` is stable (no flag needed).
+- Build: `npm run build` · Dev: `npm run dev` (no flags needed since libSQL).
 
 ## Key conventions & gotchas
-- Build trap: `src/lib/db.ts` uses `:memory:` when `NEXT_PHASE=phase-production-build`
-  so `next build` workers don't deadlock on the SQLite file (ship-app skill gotcha #1).
+- Build trap: `src/lib/db.ts` uses `:memory:` when `NEXT_PHASE=phase-production-build`.
+- Restore keeps a pre-restore snapshot in the `restore_snapshots` table (last 5 per business), not on disk.
 - Every domain table has `business_id`; all queries are scoped to the active business.
 - Currency renders Western digits with thousands separators (`Tk. 40,711.54`), never
   Bangla numerals, in both locales.

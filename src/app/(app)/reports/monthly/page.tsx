@@ -15,9 +15,9 @@ function monthOf(y: number, m: number) {
   const Y = d.getUTCFullYear(), M = d.getUTCMonth();
   return { y: Y, m: M, key: `${Y}-${String(M + 1).padStart(2, "0")}`, from: new Date(Date.UTC(Y, M, 1)).toISOString().slice(0, 10), to: new Date(Date.UTC(Y, M + 1, 0)).toISOString().slice(0, 10), label: `${MONTHS[M]} ${Y}` };
 }
-const cogs = (bid: string, kind: string, from: string, to: string) => get<{ s: number }>(
+const cogs = async (bid: string, kind: string, from: string, to: string) => (await get<{ s: number }>(
   `SELECT COALESCE(SUM(di.qty*i.purchase_price),0) s FROM doc_items di JOIN documents d ON d.id=di.document_id JOIN items i ON i.id=di.item_id
-   WHERE d.business_id=? AND d.kind=? AND d.date>=? AND d.date<=?`, [bid, kind, from, to])?.s ?? 0;
+   WHERE d.business_id=? AND d.kind=? AND d.date>=? AND d.date<=?`, [bid, kind, from, to]))?.s ?? 0;
 
 export default async function MonthlyReport({ searchParams }: { searchParams: Promise<{ m?: string }> }) {
   const ctx = await requireCtx();
@@ -27,27 +27,27 @@ export default async function MonthlyReport({ searchParams }: { searchParams: Pr
   const [ty, tm] = (sp.m && /^\d{4}-\d{2}$/.test(sp.m) ? sp.m : TODAY().slice(0, 7)).split("-").map(Number);
   const cur = monthOf(ty, tm - 1), prev = monthOf(ty, tm - 2), next = monthOf(ty, tm);
 
-  const revenue = sumDocuments(bid, "sales_invoice", cur.from, cur.to) - sumDocuments(bid, "sales_return", cur.from, cur.to);
-  const prevRevenue = sumDocuments(bid, "sales_invoice", prev.from, prev.to) - sumDocuments(bid, "sales_return", prev.from, prev.to);
-  const purchases = sumDocuments(bid, "purchase_bill", cur.from, cur.to) - sumDocuments(bid, "purchase_return", cur.from, cur.to);
-  const cost = cogs(bid, "sales_invoice", cur.from, cur.to) - cogs(bid, "sales_return", cur.from, cur.to);
+  const revenue = (await sumDocuments(bid, "sales_invoice", cur.from, cur.to)) - (await sumDocuments(bid, "sales_return", cur.from, cur.to));
+  const prevRevenue = (await sumDocuments(bid, "sales_invoice", prev.from, prev.to)) - (await sumDocuments(bid, "sales_return", prev.from, prev.to));
+  const purchases = (await sumDocuments(bid, "purchase_bill", cur.from, cur.to)) - (await sumDocuments(bid, "purchase_return", cur.from, cur.to));
+  const cost = (await cogs(bid, "sales_invoice", cur.from, cur.to)) - (await cogs(bid, "sales_return", cur.from, cur.to));
   const gross = revenue - cost;
-  const expenses = sumExpenses(bid, cur.from, cur.to);
-  const otherIncome = sumIncomes(bid, cur.from, cur.to);
+  const expenses = (await sumExpenses(bid, cur.from, cur.to));
+  const otherIncome = (await sumIncomes(bid, cur.from, cur.to));
   const net = gross - expenses + otherIncome;
   const growth = prevRevenue > 0 ? ((revenue - prevRevenue) / prevRevenue) * 100 : revenue > 0 ? 100 : 0;
-  const invoices = get<{ n: number }>("SELECT COUNT(*) n FROM documents WHERE business_id=? AND kind='sales_invoice' AND date>=? AND date<=?", [bid, cur.from, cur.to])?.n ?? 0;
+  const invoices = (await get<{ n: number }>("SELECT COUNT(*) n FROM documents WHERE business_id=? AND kind='sales_invoice' AND date>=? AND date<=?", [bid, cur.from, cur.to]))?.n ?? 0;
 
-  const topItems = all<{ name: string; qty: number; amt: number }>(
-    `SELECT di.name, SUM(di.qty) qty, SUM(di.amount) amt FROM doc_items di JOIN documents d ON d.id=di.document_id
-     WHERE d.business_id=? AND d.kind='sales_invoice' AND d.date>=? AND d.date<=? GROUP BY di.name ORDER BY amt DESC LIMIT 5`, [bid, cur.from, cur.to]);
-  const topCustomers = all<{ id: string; name: string; n: number; amt: number }>(
-    `SELECT p.id, p.name, COUNT(*) n, SUM(d.total) amt FROM documents d JOIN parties p ON p.id=d.party_id
-     WHERE d.business_id=? AND d.kind='sales_invoice' AND d.date>=? AND d.date<=? GROUP BY p.id ORDER BY amt DESC LIMIT 5`, [bid, cur.from, cur.to]);
-  const expenseBreak = all<{ category: string | null; s: number }>(
-    "SELECT category, SUM(amount) s FROM expenses WHERE business_id=? AND date>=? AND date<=? GROUP BY category ORDER BY s DESC", [bid, cur.from, cur.to]);
-  const moneyIn = get<{ s: number }>("SELECT COALESCE(SUM(amount),0) s FROM payments WHERE business_id=? AND kind='in' AND date>=? AND date<=?", [bid, cur.from, cur.to])?.s ?? 0;
-  const moneyOut = get<{ s: number }>("SELECT COALESCE(SUM(amount),0) s FROM payments WHERE business_id=? AND kind='out' AND date>=? AND date<=?", [bid, cur.from, cur.to])?.s ?? 0;
+  const topItems = (await all<{ name: string; qty: number; amt: number }>(
+      `SELECT di.name, SUM(di.qty) qty, SUM(di.amount) amt FROM doc_items di JOIN documents d ON d.id=di.document_id
+     WHERE d.business_id=? AND d.kind='sales_invoice' AND d.date>=? AND d.date<=? GROUP BY di.name ORDER BY amt DESC LIMIT 5`, [bid, cur.from, cur.to]));
+  const topCustomers = (await all<{ id: string; name: string; n: number; amt: number }>(
+      `SELECT p.id, p.name, COUNT(*) n, SUM(d.total) amt FROM documents d JOIN parties p ON p.id=d.party_id
+     WHERE d.business_id=? AND d.kind='sales_invoice' AND d.date>=? AND d.date<=? GROUP BY p.id ORDER BY amt DESC LIMIT 5`, [bid, cur.from, cur.to]));
+  const expenseBreak = (await all<{ category: string | null; s: number }>(
+      "SELECT category, SUM(amount) s FROM expenses WHERE business_id=? AND date>=? AND date<=? GROUP BY category ORDER BY s DESC", [bid, cur.from, cur.to]));
+  const moneyIn = (await get<{ s: number }>("SELECT COALESCE(SUM(amount),0) s FROM payments WHERE business_id=? AND kind='in' AND date>=? AND date<=?", [bid, cur.from, cur.to]))?.s ?? 0;
+  const moneyOut = (await get<{ s: number }>("SELECT COALESCE(SUM(amount),0) s FROM payments WHERE business_id=? AND kind='out' AND date>=? AND date<=?", [bid, cur.from, cur.to]))?.s ?? 0;
 
   const narrative =
     `In ${cur.label}, ${ctx.business.name} made ${invoices} sale${invoices === 1 ? "" : "s"} worth ${tk(revenue)} (net of returns), which ${growth >= 0 ? "rose" : "fell"} ${Math.abs(growth).toFixed(1)}% versus ${prev.label}. ` +

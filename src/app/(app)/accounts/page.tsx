@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 export default async function AccountsIndex() {
   const ctx = await requireCtx();
   if (!ctx) redirect("/login");
-  const first = loadAccounts(ctx.business.id)[0];
+  const first = (await loadAccounts(ctx.business.id))[0];
   if (first) redirect(`/accounts/${first.id}`);
   return (
     <div className="md-empty-pane">

@@ -7,7 +7,7 @@ import { logAudit } from "@/lib/audit";
 async function guard(action: string) {
   const ctx = await requireCtx();
   if (!ctx) return { error: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) };
-  const m = getMember(ctx.business.id, ctx.user.id);
+  const m = (await getMember(ctx.business.id, ctx.user.id));
   if (!can(ctx.role, m?.permissions ?? null, "parties", action)) {
     return { error: NextResponse.json({ error: "Forbidden" }, { status: 403 }) };
   }
@@ -31,62 +31,62 @@ export async function POST(req: Request) {
 
   if (op === "create") {
     const id = uid();
-    run(
-      `INSERT INTO parties (id, business_id, name, phone, address, type, category, opening_balance, note, email, vat, photo, as_of_date, created_at)
+    (await run(
+            `INSERT INTO parties (id, business_id, name, phone, address, type, category, opening_balance, note, email, vat, photo, as_of_date, created_at)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      [id, bid, body.name, body.phone || null, body.address || null, body.type ?? "customer",
-       body.category || null, opening(), body.note ?? null, body.email || null, body.vat || null, body.photo || null,
-       body.as_of_date || null, nowIso()]
-    );
-    logAudit({ businessId: bid, userId: ctx!.user.id, userName: ctx!.user.name, action: "create", entity: "party", entityId: id, summary: `Added party ${body.name}`, after: { ...body, photo: body.photo ? "[image]" : null } });
+            [id, bid, body.name, body.phone || null, body.address || null, body.type ?? "customer",
+             body.category || null, opening(), body.note ?? null, body.email || null, body.vat || null, body.photo || null,
+             body.as_of_date || null, nowIso()]
+          ));
+    (await logAudit({ businessId: bid, userId: ctx!.user.id, userName: ctx!.user.name, action: "create", entity: "party", entityId: id, summary: `Added party ${body.name}`, after: { ...body, photo: body.photo ? "[image]" : null } }));
     return NextResponse.json({ ok: true, id });
   }
 
   if (op === "update") {
-    const before = get<Record<string, unknown>>("SELECT * FROM parties WHERE id = ? AND business_id = ?", [body.id, bid]);
+    const before = (await get<Record<string, unknown>>("SELECT * FROM parties WHERE id = ? AND business_id = ?", [body.id, bid]));
     if (!before) return NextResponse.json({ error: "Not found" }, { status: 404 });
-    run(
-      `UPDATE parties SET name=?, phone=?, address=?, type=?, category=?, opening_balance=?, note=? WHERE id=? AND business_id=?`,
-      [body.name, body.phone || null, body.address || null, body.type ?? "customer", body.category || null,
-       opening(), body.note ?? before.note ?? null, body.id, bid]
-    );
+    (await run(
+            `UPDATE parties SET name=?, phone=?, address=?, type=?, category=?, opening_balance=?, note=? WHERE id=? AND business_id=?`,
+            [body.name, body.phone || null, body.address || null, body.type ?? "customer", body.category || null,
+             opening(), body.note ?? before.note ?? null, body.id, bid]
+          ));
     // Newer fields are only touched when the client sends them.
     for (const k of ["email", "vat", "photo", "as_of_date"] as const) {
-      if (k in body) run(`UPDATE parties SET ${k}=? WHERE id=? AND business_id=?`, [body[k] || null, body.id, bid]);
+      if (k in body) (await run(`UPDATE parties SET ${k}=? WHERE id=? AND business_id=?`, [body[k] || null, body.id, bid]));
     }
-    logAudit({ businessId: bid, userId: ctx!.user.id, userName: ctx!.user.name, action: "update", entity: "party", entityId: body.id, summary: `Updated party ${body.name}`, before: { ...before, photo: before.photo ? "[image]" : null }, after: { ...body, photo: body.photo ? "[image]" : null } });
+    (await logAudit({ businessId: bid, userId: ctx!.user.id, userName: ctx!.user.name, action: "update", entity: "party", entityId: body.id, summary: `Updated party ${body.name}`, before: { ...before, photo: before.photo ? "[image]" : null }, after: { ...body, photo: body.photo ? "[image]" : null } }));
     return NextResponse.json({ ok: true });
   }
 
   // Adjust Balance: shifts the party's opening balance (+ = they owe us more, − = we owe them more).
   if (op === "adjust_balance") {
-    const before = get<{ opening_balance: number; name: string }>("SELECT opening_balance, name FROM parties WHERE id = ? AND business_id = ?", [body.id, bid]);
+    const before = (await get<{ opening_balance: number; name: string }>("SELECT opening_balance, name FROM parties WHERE id = ? AND business_id = ?", [body.id, bid]));
     if (!before) return NextResponse.json({ error: "Not found" }, { status: 404 });
     const amt = Math.abs(Number(body.amount) || 0);
     if (!amt) return NextResponse.json({ error: "Enter an amount." }, { status: 400 });
     const delta = body.kind === "give" ? -amt : amt;
-    run("UPDATE parties SET opening_balance = opening_balance + ? WHERE id=? AND business_id=?", [delta, body.id, bid]);
-    logAudit({ businessId: bid, userId: ctx!.user.id, userName: ctx!.user.name, action: "update", entity: "party", entityId: body.id, summary: `Adjusted balance of ${before.name} by ${delta}${body.note ? " — " + body.note : ""}`, before: { opening_balance: before.opening_balance }, after: { opening_balance: before.opening_balance + delta, date: body.date, note: body.note } });
+    (await run("UPDATE parties SET opening_balance = opening_balance + ? WHERE id=? AND business_id=?", [delta, body.id, bid]));
+    (await logAudit({ businessId: bid, userId: ctx!.user.id, userName: ctx!.user.name, action: "update", entity: "party", entityId: body.id, summary: `Adjusted balance of ${before.name} by ${delta}${body.note ? " — " + body.note : ""}`, before: { opening_balance: before.opening_balance }, after: { opening_balance: before.opening_balance + delta, date: body.date, note: body.note } }));
     return NextResponse.json({ ok: true });
   }
 
   if (op === "add_category") {
     const name = String(body.name || "").trim();
     if (!name) return NextResponse.json({ error: "Enter a name." }, { status: 400 });
-    if (!get("SELECT id FROM categories WHERE business_id=? AND kind='party' AND name=?", [bid, name]))
-      run("INSERT INTO categories (id, business_id, kind, name) VALUES (?,?,?,?)", [uid(), bid, "party", name]);
+    if (!(await get("SELECT id FROM categories WHERE business_id=? AND kind='party' AND name=?", [bid, name])))
+      (await run("INSERT INTO categories (id, business_id, kind, name) VALUES (?,?,?,?)", [uid(), bid, "party", name]));
     return NextResponse.json({ ok: true, name });
   }
 
   if (op === "delete") {
-    const before = get("SELECT * FROM parties WHERE id = ? AND business_id = ?", [body.id, bid]);
+    const before = (await get("SELECT * FROM parties WHERE id = ? AND business_id = ?", [body.id, bid]));
     if (!before) return NextResponse.json({ error: "Not found" }, { status: 404 });
-    const used = get<{ n: number }>(
-      `SELECT (SELECT COUNT(*) FROM documents WHERE business_id=? AND party_id=?) +
-              (SELECT COUNT(*) FROM payments WHERE business_id=? AND party_id=?) n`, [bid, body.id, bid, body.id])?.n ?? 0;
+    const used = (await get<{ n: number }>(
+          `SELECT (SELECT COUNT(*) FROM documents WHERE business_id=? AND party_id=?) +
+              (SELECT COUNT(*) FROM payments WHERE business_id=? AND party_id=?) n`, [bid, body.id, bid, body.id]))?.n ?? 0;
     if (used > 0) return NextResponse.json({ error: `This party has ${used} transaction(s). Delete those first — deleting the party would silently remove its due from your books.` }, { status: 409 });
-    run("DELETE FROM parties WHERE id = ? AND business_id = ?", [body.id, bid]);
-    logAudit({ businessId: bid, userId: ctx!.user.id, userName: ctx!.user.name, action: "delete", entity: "party", entityId: body.id, summary: `Deleted party`, before });
+    (await run("DELETE FROM parties WHERE id = ? AND business_id = ?", [body.id, bid]));
+    (await logAudit({ businessId: bid, userId: ctx!.user.id, userName: ctx!.user.name, action: "delete", entity: "party", entityId: body.id, summary: `Deleted party`, before }));
     return NextResponse.json({ ok: true });
   }
 
@@ -99,16 +99,16 @@ export async function POST(req: Request) {
     for (const r of rows.slice(1)) {
       const name = r[idx("name")]?.trim();
       if (!name) continue;
-      run(
-        `INSERT INTO parties (id, business_id, name, phone, address, type, category, opening_balance, note, created_at)
+      (await run(
+                `INSERT INTO parties (id, business_id, name, phone, address, type, category, opening_balance, note, created_at)
          VALUES (?,?,?,?,?,?,?,?,?,?)`,
-        [uid(), bid, name, r[idx("phone")] ?? null, r[idx("address")] ?? null,
-         (r[idx("type")] || "customer").trim(), r[idx("category")] ?? null,
-         Number(r[idx("opening_balance")]) || 0, null, nowIso()]
-      );
+                [uid(), bid, name, r[idx("phone")] ?? null, r[idx("address")] ?? null,
+                 (r[idx("type")] || "customer").trim(), r[idx("category")] ?? null,
+                 Number(r[idx("opening_balance")]) || 0, null, nowIso()]
+              ));
       count++;
     }
-    logAudit({ businessId: bid, userId: ctx!.user.id, userName: ctx!.user.name, action: "create", entity: "party", summary: `Imported ${count} parties` });
+    (await logAudit({ businessId: bid, userId: ctx!.user.id, userName: ctx!.user.name, action: "create", entity: "party", summary: `Imported ${count} parties` }));
     return NextResponse.json({ ok: true, count });
   }
 

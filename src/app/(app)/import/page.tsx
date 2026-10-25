@@ -10,8 +10,8 @@ export default async function ImportPage() {
   const ctx = await requireCtx();
   if (!ctx) redirect("/login");
   const bid = ctx.business.id;
-  const np = get<{ n: number }>("SELECT COUNT(*) n FROM parties WHERE business_id=?", [bid])?.n ?? 0;
-  const ni = get<{ n: number }>("SELECT COUNT(*) n FROM items WHERE business_id=?", [bid])?.n ?? 0;
+  const np = (await get<{ n: number }>("SELECT COUNT(*) n FROM parties WHERE business_id=?", [bid]))?.n ?? 0;
+  const ni = (await get<{ n: number }>("SELECT COUNT(*) n FROM items WHERE business_id=?", [bid]))?.n ?? 0;
   const cards = [
     { href: "/import/parties", icon: "users", title: "Import Parties", desc: "Add customers and suppliers in bulk — name, phone, type, category, opening balance (To Receive / To Give), address, email and VAT number.", meta: `${np} parties now` },
     { href: "/import/items", icon: "box", title: "Import Items", desc: "Add products and services in bulk — code, category, unit, sales / purchase / MRP / wholesale price, opening stock and low stock alert.", meta: `${ni} items now` },

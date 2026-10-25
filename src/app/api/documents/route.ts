@@ -31,26 +31,26 @@ export async function POST(req: Request) {
   const bid = ctx.business.id;
   const body = await req.json();
   const op = body.op as string;
-  const m = getMember(bid, ctx.user.id);
+  const m = (await getMember(bid, ctx.user.id));
   const allow = (kind: string, action: string) => can(ctx.role, m?.permissions ?? null, KIND_MODULE[kind] || "sales", action);
 
   if (op === "create" || op === "update") {
     let kind = body.kind as string;
     if (op === "update") {
-      const cur = get<{ kind: string }>("SELECT kind FROM documents WHERE id=? AND business_id=?", [body.id, bid]);
+      const cur = (await get<{ kind: string }>("SELECT kind FROM documents WHERE id=? AND business_id=?", [body.id, bid]));
       if (!cur) return NextResponse.json({ error: "Not found" }, { status: 404 });
       kind = cur.kind;
     }
     if (!KINDS.includes(kind)) return NextResponse.json({ error: "Bad kind" }, { status: 400 });
     if (!allow(kind, op === "create" ? "create" : "edit")) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    if (!belongs("parties", body.party_id, bid) || !belongs("accounts", body.account_id, bid))
+    if (!(await belongs("parties", body.party_id, bid)) || !(await belongs("accounts", body.account_id, bid)))
       return NextResponse.json({ error: "Party or account not found." }, { status: 404 });
     if (!body.date || !/^\d{4}-\d{2}-\d{2}$/.test(String(body.date))) return NextResponse.json({ error: "Pick a valid date." }, { status: 400 });
     const lines = parseLines(body.lines);
     if (lines.length === 0) return NextResponse.json({ error: "Add at least one item." }, { status: 400 });
     const manual = Number(body.number) > 0 ? Math.floor(Number(body.number)) : null;
     if (manual) {
-      const clash = get<{ id: string }>("SELECT id FROM documents WHERE business_id=? AND kind=? AND number=?", [bid, kind, manual]);
+      const clash = (await get<{ id: string }>("SELECT id FROM documents WHERE business_id=? AND kind=? AND number=?", [bid, kind, manual]));
       if (clash && clash.id !== body.id) return NextResponse.json({ error: `Number ${manual} is already used.` }, { status: 400 });
     }
     const input = {
@@ -60,33 +60,33 @@ export async function POST(req: Request) {
       dueDate: body.due_date || null, paidAmount: Number(body.paid_amount) || 0, accountId: body.account_id || null,
       createdBy: ctx.user.name,
     };
-    const okItems = lines.every((l) => belongs("items", l.itemId, bid));
+    const okItems = (await Promise.all(lines.map((l) => belongs("items", l.itemId, bid)))).every(Boolean);
     if (!okItems) return NextResponse.json({ error: "An item in this bill was not found." }, { status: 404 });
-    const res = op === "create" ? createDocument(input) : updateDocument(body.id, input);
-    logAudit({ businessId: bid, userId: ctx.user.id, userName: ctx.user.name, action: op, entity: kind, entityId: res.id, summary: `${op === "create" ? "Created" : "Edited"} ${kind} #${res.number} — ${res.total}` });
+    const res = op === "create" ? (await createDocument(input)) : (await updateDocument(body.id, input));
+    (await logAudit({ businessId: bid, userId: ctx.user.id, userName: ctx.user.name, action: op, entity: kind, entityId: res.id, summary: `${op === "create" ? "Created" : "Edited"} ${kind} #${res.number} — ${res.total}` }));
     return NextResponse.json({ ok: true, ...res });
   }
 
   if (op === "duplicate" || op === "convert") {
-    const src = get<{ kind: string; number: number }>("SELECT kind, number FROM documents WHERE id=? AND business_id=?", [body.id, bid]);
+    const src = (await get<{ kind: string; number: number }>("SELECT kind, number FROM documents WHERE id=? AND business_id=?", [body.id, bid]));
     if (!src) return NextResponse.json({ error: "Not found" }, { status: 404 });
     const target = (op === "duplicate" ? src.kind : body.to) as DocKind;
     if (!KINDS.includes(target)) return NextResponse.json({ error: "Bad target" }, { status: 400 });
     if (!allow(target, "create")) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    const res = cloneDocument(bid, body.id, target, ctx.user.name);
-    logAudit({ businessId: bid, userId: ctx.user.id, userName: ctx.user.name, action: "create", entity: target, entityId: res.id, summary: `${op === "duplicate" ? "Duplicated" : "Converted"} ${src.kind} #${src.number} → ${target} #${res.number}` });
+    const res = (await cloneDocument(bid, body.id, target, ctx.user.name));
+    (await logAudit({ businessId: bid, userId: ctx.user.id, userName: ctx.user.name, action: "create", entity: target, entityId: res.id, summary: `${op === "duplicate" ? "Duplicated" : "Converted"} ${src.kind} #${src.number} → ${target} #${res.number}` }));
     return NextResponse.json({ ok: true, ...res });
   }
 
   if (op === "delete") {
-    const before = get<{ kind: string; number: number }>("SELECT kind, number FROM documents WHERE id=? AND business_id=?", [body.id, bid]);
+    const before = (await get<{ kind: string; number: number }>("SELECT kind, number FROM documents WHERE id=? AND business_id=?", [body.id, bid]));
     if (!before) return NextResponse.json({ error: "Not found" }, { status: 404 });
     if (!allow(before.kind, "delete")) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    tx(() => {
-      run("DELETE FROM payments WHERE document_id=? AND is_auto=1", [body.id]);
-      run("DELETE FROM documents WHERE id=? AND business_id=?", [body.id, bid]);
-    });
-    logAudit({ businessId: bid, userId: ctx.user.id, userName: ctx.user.name, action: "delete", entity: before.kind, entityId: body.id, summary: `Deleted ${before.kind} #${before.number}`, before });
+    (await tx(async () => {
+            (await run("DELETE FROM payments WHERE document_id=? AND is_auto=1", [body.id]));
+            (await run("DELETE FROM documents WHERE id=? AND business_id=?", [body.id, bid]));
+          }));
+    (await logAudit({ businessId: bid, userId: ctx.user.id, userName: ctx.user.name, action: "delete", entity: before.kind, entityId: body.id, summary: `Deleted ${before.kind} #${before.number}`, before }));
     return NextResponse.json({ ok: true });
   }
 

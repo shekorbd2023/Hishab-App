@@ -21,7 +21,7 @@ export default async function DocPreview({ params, searchParams }: {
   const ctx = await requireCtx();
   if (!ctx) redirect("/login");
   const bid = ctx.business.id;
-  const loaded = loadInvoice(bid, id);
+  const loaded = (await loadInvoice(bid, id));
   if (!loaded) notFound();
   const { data, settings, letterhead, partyId, partyPhone } = loaded;
 
@@ -31,8 +31,8 @@ export default async function DocPreview({ params, searchParams }: {
     : `@page { size: ${settings.page_size === "A5" ? "A5" : "A4"}; margin: 10mm; }`;
   const name = DOC_NAME[data.kind] || "Invoice";
   const fileName = `${name.replace(/ /g, "-")}-${data.number}${data.party ? "-" + data.party.name.replace(/[^\p{L}\p{N}]+/gu, "-") : ""}`;
-  const { parties, accounts } = paymentPickers(bid);
-  const next = all<{ kind: string; value: number }>("SELECT kind, value FROM counters WHERE business_id=?", [bid]);
+  const { parties, accounts } = (await paymentPickers(bid));
+  const next = (await all<{ kind: string; value: number }>("SELECT kind, value FROM counters WHERE business_id=?", [bid]));
   const nextOf = (k: string) => (next.find((c) => c.kind === k)?.value ?? 0) + 1;
   const due = Math.max(0, Math.round((data.total - data.received) * 100) / 100);
   const summary = `${ctx.business.name}\n${name} #${data.number} · ${data.date}\n` +

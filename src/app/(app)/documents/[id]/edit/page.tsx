@@ -12,9 +12,9 @@ export default async function EditDocument({ params }: { params: Promise<{ id: s
   if (!ctx) redirect("/login");
   const { id } = await params;
   const bid = ctx.business.id;
-  const doc = loadDocForEdit(bid, id);
+  const doc = (await loadDocForEdit(bid, id));
   if (!doc || !isDocKind(doc.kind)) notFound();
-  const { parties, items, accounts } = editorData(bid);
+  const { parties, items, accounts } = (await editorData(bid));
   return (
     <DocumentEditor
       key={doc.id}
@@ -22,7 +22,7 @@ export default async function EditDocument({ params }: { params: Promise<{ id: s
       parties={parties}
       items={items}
       accounts={accounts}
-      settings={editorSettings(bid, doc.kind)}
+      settings={(await editorSettings(bid, doc.kind))}
       nextNumber={doc.number}
       doc={doc}
     />

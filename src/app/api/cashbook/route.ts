@@ -14,8 +14,8 @@ export async function POST(req: Request) {
   const op = body.op as string;
   const mod = table === "incomes" ? "income" : "expense";
   const action = op === "update" ? "edit" : op === "delete" ? "delete" : "create";
-  if (!allowed(ctx, mod, action)) return NextResponse.json({ error: "You don't have permission for this." }, { status: 403 });
-  if ((op === "create" || op === "update") && !belongs("accounts", body.account_id, bid))
+  if (!(await allowed(ctx, mod, action))) return NextResponse.json({ error: "You don't have permission for this." }, { status: 403 });
+  if ((op === "create" || op === "update") && !(await belongs("accounts", body.account_id, bid)))
     return NextResponse.json({ error: "Account not found." }, { status: 404 });
 
   // Optional itemised lines [{name, qty, rate}] → amount = Σ qty × rate
@@ -28,34 +28,34 @@ export async function POST(req: Request) {
     const name = String(body.name || "").trim();
     const ckind = body.kind === "income" ? "income" : "expense";
     if (!name) return NextResponse.json({ error: "Enter a name." }, { status: 400 });
-    if (!get("SELECT id FROM categories WHERE business_id=? AND kind=? AND name=?", [bid, ckind, name]))
-      run("INSERT INTO categories (id, business_id, kind, name) VALUES (?,?,?,?)", [uid(), bid, ckind, name]);
+    if (!(await get("SELECT id FROM categories WHERE business_id=? AND kind=? AND name=?", [bid, ckind, name])))
+      (await run("INSERT INTO categories (id, business_id, kind, name) VALUES (?,?,?,?)", [uid(), bid, ckind, name]));
     return NextResponse.json({ ok: true, name });
   }
 
   if ((op === "create" || op === "update") && amount <= 0) return NextResponse.json({ error: "Enter an amount." }, { status: 400 });
   if (op === "create") {
     const id = uid();
-    const number = takeNumber(bid, table === "incomes" ? "income" : "expense", Number(body.number) > 0 ? Number(body.number) : null);
-    run(`INSERT INTO ${table} (id, business_id, number, lines, category, account_id, amount, date, note, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-      [id, bid, number, lines.length ? JSON.stringify(lines) : null, body.category ?? null, body.account_id ?? null, amount, body.date, body.note ?? null, ctx.user.name, nowIso()]);
-    logAudit({ businessId: bid, userId: ctx.user.id, userName: ctx.user.name, action: "create", entity: body.kind, entityId: id, summary: `${body.kind} #${number} ${amount}`, after: body });
+    const number = (await takeNumber(bid, table === "incomes" ? "income" : "expense", Number(body.number) > 0 ? Number(body.number) : null));
+    (await run(`INSERT INTO ${table} (id, business_id, number, lines, category, account_id, amount, date, note, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+            [id, bid, number, lines.length ? JSON.stringify(lines) : null, body.category ?? null, body.account_id ?? null, amount, body.date, body.note ?? null, ctx.user.name, nowIso()]));
+    (await logAudit({ businessId: bid, userId: ctx.user.id, userName: ctx.user.name, action: "create", entity: body.kind, entityId: id, summary: `${body.kind} #${number} ${amount}`, after: body }));
     return NextResponse.json({ ok: true, id, number });
   }
   if (op === "update") {
-    const before = get(`SELECT * FROM ${table} WHERE id=? AND business_id=?`, [body.id, bid]);
+    const before = (await get(`SELECT * FROM ${table} WHERE id=? AND business_id=?`, [body.id, bid]));
     if (!before) return NextResponse.json({ error: "Not found" }, { status: 404 });
-    run(`UPDATE ${table} SET category=?, account_id=?, amount=?, date=?, note=?, lines=?, number=COALESCE(?, number) WHERE id=? AND business_id=?`,
-      [body.category ?? null, body.account_id ?? null, amount, body.date, body.note ?? null, lines.length ? JSON.stringify(lines) : null,
-       Number(body.number) > 0 ? Number(body.number) : null, body.id, bid]);
-    logAudit({ businessId: bid, userId: ctx.user.id, userName: ctx.user.name, action: "update", entity: body.kind, entityId: body.id, summary: `Edited ${body.kind}`, before, after: body });
+    (await run(`UPDATE ${table} SET category=?, account_id=?, amount=?, date=?, note=?, lines=?, number=COALESCE(?, number) WHERE id=? AND business_id=?`,
+            [body.category ?? null, body.account_id ?? null, amount, body.date, body.note ?? null, lines.length ? JSON.stringify(lines) : null,
+             Number(body.number) > 0 ? Number(body.number) : null, body.id, bid]));
+    (await logAudit({ businessId: bid, userId: ctx.user.id, userName: ctx.user.name, action: "update", entity: body.kind, entityId: body.id, summary: `Edited ${body.kind}`, before, after: body }));
     return NextResponse.json({ ok: true });
   }
   if (op === "delete") {
-    const before = get(`SELECT * FROM ${table} WHERE id=? AND business_id=?`, [body.id, bid]);
+    const before = (await get(`SELECT * FROM ${table} WHERE id=? AND business_id=?`, [body.id, bid]));
     if (!before) return NextResponse.json({ error: "Not found" }, { status: 404 });
-    run(`DELETE FROM ${table} WHERE id=? AND business_id=?`, [body.id, bid]);
-    logAudit({ businessId: bid, userId: ctx.user.id, userName: ctx.user.name, action: "delete", entity: body.kind, entityId: body.id, summary: `Deleted ${body.kind}`, before });
+    (await run(`DELETE FROM ${table} WHERE id=? AND business_id=?`, [body.id, bid]));
+    (await logAudit({ businessId: bid, userId: ctx.user.id, userName: ctx.user.name, action: "delete", entity: body.kind, entityId: body.id, summary: `Deleted ${body.kind}`, before }));
     return NextResponse.json({ ok: true });
   }
   return NextResponse.json({ error: "Unknown op" }, { status: 400 });

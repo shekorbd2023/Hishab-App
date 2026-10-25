@@ -9,7 +9,7 @@ export default async function EditItemPage({ params }: { params: Promise<{ id: s
   const { id } = await params;
   const ctx = await requireCtx();
   if (!ctx) redirect("/login");
-  const it = loadItems(ctx.business.id).find((i) => i.id === id);
+  const it = (await loadItems(ctx.business.id)).find((i) => i.id === id);
   if (!it) notFound();
-  return <ItemForm initial={it} stock={it.stock} categories={itemCategories(ctx.business.id)} />;
+  return <ItemForm initial={it} stock={it.stock} categories={(await itemCategories(ctx.business.id))} />;
 }

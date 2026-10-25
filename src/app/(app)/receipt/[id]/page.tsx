@@ -15,7 +15,7 @@ export default async function ReceiptPreview({ params, searchParams }: {
   const ctx = await requireCtx();
   if (!ctx) redirect("/login");
   const bid = ctx.business.id;
-  const loaded = loadReceipt(bid, id);
+  const loaded = (await loadReceipt(bid, id));
   if (!loaded) notFound();
   const { data, settings, letterhead, raw } = loaded;
   const thermal = sp.thermal === "1" || (settings.print_type === "thermal" && sp.regular !== "1");
@@ -25,7 +25,7 @@ export default async function ReceiptPreview({ params, searchParams }: {
   const isIn = data.kind === "in";
   const title = `${isIn ? "Payment In" : "Payment Out"} #${data.number}`;
   const fileName = `${isIn ? "Payment-Receipt" : "Payment-Voucher"}-${data.number}${data.party ? "-" + data.party.name.replace(/[^\p{L}\p{N}]+/gu, "-") : ""}`;
-  const { parties, accounts } = paymentPickers(bid);
+  const { parties, accounts } = (await paymentPickers(bid));
   return (
     <div>
       <ReceiptBar

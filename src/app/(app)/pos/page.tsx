@@ -9,15 +9,15 @@ export default async function POSPage() {
   const ctx = await requireCtx();
   if (!ctx) redirect("/login");
   const bid = ctx.business.id;
-  const { parties, items, accounts } = editorData(bid);
-  const settings = editorSettings(bid, "sales_invoice");
+  const { parties, items, accounts } = (await editorData(bid));
+  const settings = (await editorSettings(bid, "sales_invoice"));
   return (
     <POSClient
       items={items.filter((i) => i.type !== "Service" || true)}
       parties={parties.filter((p) => p.type !== "supplier")}
       accounts={accounts}
       settings={settings}
-      nextNo={peekNextNumber(bid, "sales_invoice")}
+      nextNo={(await peekNextNumber(bid, "sales_invoice"))}
     />
   );
 }

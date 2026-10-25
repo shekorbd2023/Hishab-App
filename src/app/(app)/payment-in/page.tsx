@@ -9,6 +9,6 @@ export const dynamic = "force-dynamic";
 export default async function Page() {
   const ctx = await requireCtx();
   if (!ctx) redirect("/login");
-  const d = loadPayments(ctx.business.id, "in");
+  const d = (await loadPayments(ctx.business.id, "in"));
   return <Suspense><PaymentList kind="in" rows={d.rows} parties={d.parties} accounts={d.accounts} nextNumber={d.nextNumber} /></Suspense>;
 }

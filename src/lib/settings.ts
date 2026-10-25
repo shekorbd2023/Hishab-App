@@ -125,8 +125,8 @@ export const SETTINGS_DEFAULTS: BizSettings = {
 
 export { INVOICE_COLORS } from "./invoice-colors";
 
-export function getSettings(businessId: string): BizSettings {
-  const row = get<{ json: string | null }>("SELECT json FROM settings WHERE business_id = ?", [businessId]);
+export async function getSettings(businessId: string): Promise<BizSettings> {
+  const row = (await get<{ json: string | null }>("SELECT json FROM settings WHERE business_id = ?", [businessId]));
   if (!row?.json) return { ...SETTINGS_DEFAULTS };
   try {
     const parsed = JSON.parse(row.json) as Partial<BizSettings>;
@@ -139,9 +139,9 @@ export function getSettings(businessId: string): BizSettings {
   }
 }
 
-export function saveSettings(businessId: string, s: Partial<BizSettings>) {
-  const merged = { ...getSettings(businessId), ...s };
-  const exists = get("SELECT business_id FROM settings WHERE business_id = ?", [businessId]);
-  if (exists) run("UPDATE settings SET json = ? WHERE business_id = ?", [JSON.stringify(merged), businessId]);
-  else run("INSERT INTO settings (business_id, json) VALUES (?,?)", [businessId, JSON.stringify(merged)]);
+export async function saveSettings(businessId: string, s: Partial<BizSettings>) {
+  const merged = { ...(await getSettings(businessId)), ...s };
+  const exists = (await get("SELECT business_id FROM settings WHERE business_id = ?", [businessId]));
+  if (exists) (await run("UPDATE settings SET json = ? WHERE business_id = ?", [JSON.stringify(merged), businessId]));
+  else (await run("INSERT INTO settings (business_id, json) VALUES (?,?)", [businessId, JSON.stringify(merged)]));
 }

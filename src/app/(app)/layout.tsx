@@ -27,14 +27,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const lc = jar.get("hishab_locale")?.value;
   const locale: Locale = isLocale(lc) ? lc : "en";
 
-  const businesses = businessesForUser(user.id).map((b) => ({ id: b.id, name: b.name, role: b.role, logo: b.logo || null }));
+  const businesses = (await businessesForUser(user.id)).map((b) => ({ id: b.id, name: b.name, role: b.role, logo: b.logo || null }));
 
   // Notifications: low-stock items + reminders due in the next 7 days (overdue included).
   const notices: Notice[] = [];
-  const stocks = itemStocks(bid);
-  const lowItems = all<{ id: string; name: string; unit: string | null; low_stock_alert: number }>(
-    "SELECT id, name, unit, low_stock_alert FROM items WHERE business_id=? AND type!='Service' AND low_stock_alert > 0", [bid]
-  );
+  const stocks = (await itemStocks(bid));
+  const lowItems = (await all<{ id: string; name: string; unit: string | null; low_stock_alert: number }>(
+      "SELECT id, name, unit, low_stock_alert FROM items WHERE business_id=? AND type!='Service' AND low_stock_alert > 0", [bid]
+    ));
   for (const it of lowItems) {
     const q = stocks[it.id] ?? 0;
     if (q <= it.low_stock_alert) {
@@ -42,10 +42,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     }
   }
   const today = TODAY();
-  const rems = all<{ id: string; due_date: string; note: string | null; pname: string | null }>(
-    `SELECT r.id, r.due_date, r.note, p.name pname FROM reminders r LEFT JOIN parties p ON p.id=r.party_id
+  const rems = (await all<{ id: string; due_date: string; note: string | null; pname: string | null }>(
+      `SELECT r.id, r.due_date, r.note, p.name pname FROM reminders r LEFT JOIN parties p ON p.id=r.party_id
      WHERE r.business_id=? AND r.done=0 AND r.due_date <= ? ORDER BY r.due_date LIMIT 30`, [bid, addDays(today, 7)]
-  );
+    ));
   for (const r of rems) {
     notices.push({ kind: "reminder", id: r.id, title: r.pname || r.note || "Reminder", text: `${r.due_date < today ? "Overdue · " : ""}Due ${r.due_date}${r.pname && r.note ? " · " + r.note : ""}`, href: "/reminders" });
   }

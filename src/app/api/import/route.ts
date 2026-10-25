@@ -1,10 +1,8 @@
 import { NextResponse } from "next/server";
 import { requireCtx, can, getMember } from "@/lib/auth";
-import { all, run, tx } from "@/lib/db";
+import { all, run, tx, batchWrite } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
 import { uid, nowIso } from "@/lib/util";
-import fs from "node:fs";
-import path from "node:path";
 
 const TABLES = [
   "parties", "items", "accounts", "documents", "payments",
@@ -19,18 +17,18 @@ const DATE = (v: unknown) => { const s = String(v ?? "").trim(); return /^\d{4}-
 type Row = Record<string, unknown>;
 
 /** Adds categories / units that don't exist yet (case-insensitive). */
-function ensureNames(bid: string, table: "categories" | "units", names: (string | null)[], kind?: string) {
+async function ensureNames(bid: string, table: "categories" | "units", names: (string | null)[], kind?: string) {
   const existing = new Set(
     (table === "categories"
-      ? all<{ name: string }>("SELECT name FROM categories WHERE business_id=? AND kind=?", [bid, kind!])
-      : all<{ name: string }>("SELECT name FROM units WHERE business_id=?", [bid])
+      ? (await all<{ name: string }>("SELECT name FROM categories WHERE business_id=? AND kind=?", [bid, kind!]))
+      : (await all<{ name: string }>("SELECT name FROM units WHERE business_id=?", [bid]))
     ).map((r) => r.name.toLowerCase())
   );
   for (const n of names) {
     if (!n || existing.has(n.toLowerCase())) continue;
     existing.add(n.toLowerCase());
-    if (table === "categories") run("INSERT INTO categories (id, business_id, kind, name) VALUES (?,?,?,?)", [uid(), bid, kind!, n]);
-    else run("INSERT INTO units (id, business_id, name) VALUES (?,?,?)", [uid(), bid, n]);
+    if (table === "categories") (await run("INSERT INTO categories (id, business_id, kind, name) VALUES (?,?,?,?)", [uid(), bid, kind!, n]));
+    else (await run("INSERT INTO units (id, business_id, name) VALUES (?,?,?)", [uid(), bid, n]));
   }
 }
 
@@ -44,53 +42,53 @@ export async function POST(req: Request) {
 
   if (body.op === "parties" || body.op === "items") {
     const mod = body.op as "parties" | "items";
-    const m = getMember(bid, ctx.user.id);
+    const m = (await getMember(bid, ctx.user.id));
     if (!can(ctx.role, m?.permissions ?? null, mod === "items" ? "inventory" : mod, "create")) return NextResponse.json({ error: "You don't have permission to add " + mod + "." }, { status: 403 });
     const rows = (Array.isArray(body.rows) ? body.rows : []) as Row[];
     if (!rows.length) return NextResponse.json({ error: "No rows to import." }, { status: 400 });
     if (rows.length > MAX_ROWS) return NextResponse.json({ error: `You can import up to ${MAX_ROWS} entries at a time.` }, { status: 400 });
     const tbl = mod === "parties" ? "parties" : "items";
-    const existing = new Set(all<{ name: string }>(`SELECT name FROM ${tbl} WHERE business_id=?`, [bid]).map((r) => r.name.trim().toLowerCase()));
+    const existing = new Set((await all<{ name: string }>(`SELECT name FROM ${tbl} WHERE business_id=?`, [bid])).map((r) => r.name.trim().toLowerCase()));
     let count = 0, skipped = 0;
     const errors: string[] = [];
     try {
-      tx(() => {
-        rows.forEach((r, i) => {
-          const name = STR(r.name);
-          if (!name) { errors.push(`Row ${i + 1}: name is required`); return; }
-          if (body.skipExisting && existing.has(name.toLowerCase())) { skipped++; return; }
-          existing.add(name.toLowerCase());
-          if (mod === "parties") {
-            const t = String(r.type ?? "").toLowerCase();
-            const type = t.startsWith("s") ? "supplier" : t === "both" ? "both" : "customer";
-            const amt = Math.abs(NUM(r.opening_balance));
-            const give = /give|pay|supplier|cr/i.test(String(r.balance_type ?? ""));
-            run(
-              `INSERT INTO parties (id, business_id, name, phone, address, type, category, opening_balance, note, email, vat, as_of_date, created_at)
+      (await tx(async () => {
+                for (const [i, r] of rows.entries()) {
+                  const name = STR(r.name);
+                  if (!name) { errors.push(`Row ${i + 1}: name is required`); continue; }
+                  if (body.skipExisting && existing.has(name.toLowerCase())) { skipped++; continue; }
+                  existing.add(name.toLowerCase());
+                  if (mod === "parties") {
+                    const t = String(r.type ?? "").toLowerCase();
+                    const type = t.startsWith("s") ? "supplier" : t === "both" ? "both" : "customer";
+                    const amt = Math.abs(NUM(r.opening_balance));
+                    const give = /give|pay|supplier|cr/i.test(String(r.balance_type ?? ""));
+                    (await run(
+                                    `INSERT INTO parties (id, business_id, name, phone, address, type, category, opening_balance, note, email, vat, as_of_date, created_at)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-              [uid(), bid, name, STR(r.phone), STR(r.address), type, STR(r.category), give ? -amt : amt, null, STR(r.email), STR(r.vat), DATE(r.as_of_date), nowIso()]
-            );
-          } else {
-            const type = /serv/i.test(String(r.type ?? "")) ? "Service" : "Product";
-            run(
-              `INSERT INTO items (id, business_id, name, category, type, code, sales_price, purchase_price, mrp_price, wholesale_price, min_wholesale_qty, unit, opening_stock, low_stock_alert, location, description, created_at)
+                                    [uid(), bid, name, STR(r.phone), STR(r.address), type, STR(r.category), give ? -amt : amt, null, STR(r.email), STR(r.vat), DATE(r.as_of_date), nowIso()]
+                                  ));
+                  } else {
+                    const type = /serv/i.test(String(r.type ?? "")) ? "Service" : "Product";
+                    (await run(
+                                    `INSERT INTO items (id, business_id, name, category, type, code, sales_price, purchase_price, mrp_price, wholesale_price, min_wholesale_qty, unit, opening_stock, low_stock_alert, location, description, created_at)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-              [uid(), bid, name, STR(r.category) || "General", type, STR(r.code), NUM(r.sales_price), NUM(r.purchase_price), NUM(r.mrp_price), NUM(r.wholesale_price),
-               NUM(r.min_wholesale_qty), STR(r.unit) || "pcs", NUM(r.opening_stock), NUM(r.low_stock_alert), STR(r.location), STR(r.description), nowIso()]
-            );
-          }
-          count++;
-        });
-        if (mod === "parties") ensureNames(bid, "categories", rows.map((r) => STR(r.category)), "party");
-        else {
-          ensureNames(bid, "categories", rows.map((r) => STR(r.category)), "item");
-          ensureNames(bid, "units", rows.map((r) => STR(r.unit)));
-        }
-      });
+                                    [uid(), bid, name, STR(r.category) || "General", type, STR(r.code), NUM(r.sales_price), NUM(r.purchase_price), NUM(r.mrp_price), NUM(r.wholesale_price),
+                                     NUM(r.min_wholesale_qty), STR(r.unit) || "pcs", NUM(r.opening_stock), NUM(r.low_stock_alert), STR(r.location), STR(r.description), nowIso()]
+                                  ));
+                  }
+                  count++;
+                }
+                if (mod === "parties") (await ensureNames(bid, "categories", rows.map((r) => STR(r.category)), "party"));
+                else {
+                  (await ensureNames(bid, "categories", rows.map((r) => STR(r.category)), "item"));
+                  (await ensureNames(bid, "units", rows.map((r) => STR(r.unit))));
+                }
+              }));
     } catch (e) {
       return NextResponse.json({ error: "Import failed: " + (e as Error).message }, { status: 500 });
     }
-    logAudit({ businessId: bid, userId: ctx.user.id, userName: ctx.user.name, action: "create", entity: mod === "parties" ? "party" : "item", summary: `Imported ${count} ${mod}${skipped ? ` (${skipped} skipped as duplicates)` : ""}` });
+    (await logAudit({ businessId: bid, userId: ctx.user.id, userName: ctx.user.name, action: "create", entity: mod === "parties" ? "party" : "item", summary: `Imported ${count} ${mod}${skipped ? ` (${skipped} skipped as duplicates)` : ""}` }));
     return NextResponse.json({ ok: true, count, skipped, errors });
   }
 
@@ -103,7 +101,7 @@ export async function POST(req: Request) {
   const data = payload.data as Record<string, Record<string, unknown>[]>;
 
   // Only real columns of each table may be written (a crafted backup can't inject SQL through key names).
-  const colsOf = (tbl: string) => new Set(all<{ name: string }>(`PRAGMA table_info(${tbl})`).map((c) => c.name));
+  const colsOf = async (tbl: string) => new Set((await all<{ name: string }>(`PRAGMA table_info(${tbl})`)).map((c) => c.name));
   // Backups from another business (or a copy of this one restored elsewhere) would clash on primary keys,
   // so every row id is re-mapped to a fresh id and every *_id reference is rewritten through the same map.
   const srcBiz = String((payload.business as { id?: string } | undefined)?.id || "");
@@ -114,49 +112,50 @@ export async function POST(req: Request) {
   }
   const REF_COLS = ["party_id", "item_id", "account_id", "document_id", "from_account_id", "to_account_id", "source_id"];
 
-  // Safety net: snapshot the current data to disk before wiping it.
+  // Safety net: keep a snapshot of the current data (inside the database, so it also works online) before wiping it.
   try {
     const snap: Record<string, unknown[]> = {};
-    for (const tbl of TABLES) snap[tbl] = all(`SELECT * FROM ${tbl} WHERE business_id = ?`, [bid]);
-    snap.doc_items = all("SELECT di.* FROM doc_items di JOIN documents d ON d.id = di.document_id WHERE d.business_id = ?", [bid]);
-    const dir = path.join(process.env.SMS_DATA_DIR || path.join(process.cwd(), "data"), "backups");
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, `before-restore_${bid}_${Date.now()}.json`),
-      JSON.stringify({ format: "hishab-business-export", version: 1, exported_at: nowIso(), business: { id: bid, name: ctx.business.name }, data: snap }));
+    for (const tbl of TABLES) snap[tbl] = await all(`SELECT * FROM ${tbl} WHERE business_id = ?`, [bid]);
+    snap.doc_items = await all("SELECT di.* FROM doc_items di JOIN documents d ON d.id = di.document_id WHERE d.business_id = ?", [bid]);
+    await run("INSERT INTO restore_snapshots (id, business_id, created_at, json) VALUES (?,?,?,?)", [uid(), bid, nowIso(),
+      JSON.stringify({ format: "hishab-business-export", version: 1, exported_at: nowIso(), business: { id: bid, name: ctx.business.name }, data: snap })]);
+    // keep only the 5 most recent snapshots per business
+    await run("DELETE FROM restore_snapshots WHERE business_id = ? AND id NOT IN (SELECT id FROM restore_snapshots WHERE business_id = ? ORDER BY created_at DESC LIMIT 5)", [bid, bid]);
   } catch { /* best effort */ }
 
+  // Build every statement first, then apply them in ONE atomic batch (all or nothing, one round trip).
   try {
-    tx(() => {
-      // Clear existing domain data for this business
-      run("DELETE FROM doc_items WHERE document_id IN (SELECT id FROM documents WHERE business_id = ?)", [bid]);
-      for (const tbl of TABLES) run(`DELETE FROM ${tbl} WHERE business_id = ?`, [bid]);
-
-      const insertRows = (tbl: string, rows: Record<string, unknown>[]) => {
-        const valid = colsOf(tbl);
-        for (const row of rows || []) {
-          if (!row || typeof row !== "object") continue;
-          const r: Record<string, unknown> = {};
-          for (const [k, v] of Object.entries(row)) if (valid.has(k)) r[k] = v;
-          if (valid.has("business_id")) r.business_id = bid;
-          if (remap) {
-            if (typeof r.id === "string") r.id = idMap.get(r.id) ?? uid();
-            for (const c of REF_COLS) if (typeof r[c] === "string") r[c] = idMap.get(r[c] as string) ?? null;
-          }
-          const cols = Object.keys(r);
-          if (cols.length === 0) continue;
-          run(`INSERT INTO ${tbl} (${cols.map((c) => `"${c}"`).join(",")}) VALUES (${cols.map(() => "?").join(",")})`, cols.map((c) => r[c]));
+    const stmts: { sql: string; params: unknown[] }[] = [
+      { sql: "DELETE FROM doc_items WHERE document_id IN (SELECT id FROM documents WHERE business_id = ?)", params: [bid] },
+      ...TABLES.map((tbl) => ({ sql: `DELETE FROM ${tbl} WHERE business_id = ?`, params: [bid] })),
+    ];
+    const insertedDocIds = new Set<string>();
+    const addRows = async (tbl: string, rows: Record<string, unknown>[]) => {
+      const valid = await colsOf(tbl);
+      for (const row of rows || []) {
+        if (!row || typeof row !== "object") continue;
+        const r: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(row)) if (valid.has(k)) r[k] = v;
+        if (valid.has("business_id")) r.business_id = bid;
+        if (remap) {
+          if (typeof r.id === "string") r.id = idMap.get(r.id) ?? uid();
+          for (const c of REF_COLS) if (typeof r[c] === "string") r[c] = idMap.get(r[c] as string) ?? null;
         }
-      };
-      for (const tbl of TABLES) insertRows(tbl, data[tbl] || []);
-      // doc_items may only point at documents that now belong to this business
-      const docIds = new Set(all<{ id: string }>("SELECT id FROM documents WHERE business_id = ?", [bid]).map((d) => d.id));
-      const lines = (data["doc_items"] || []).filter((l) => l && docIds.has(String(remap ? idMap.get(String(l.document_id)) : l.document_id)));
-      insertRows("doc_items", lines);
-    });
+        const cols = Object.keys(r);
+        if (cols.length === 0) continue;
+        if (tbl === "documents" && typeof r.id === "string") insertedDocIds.add(r.id);
+        stmts.push({ sql: `INSERT INTO ${tbl} (${cols.map((c) => `"${c}"`).join(",")}) VALUES (${cols.map(() => "?").join(",")})`, params: cols.map((c) => r[c]) });
+      }
+    };
+    for (const tbl of TABLES) await addRows(tbl, data[tbl] || []);
+    // doc_items may only point at documents restored into this business
+    const lines = (data["doc_items"] || []).filter((l) => l && insertedDocIds.has(String(remap ? idMap.get(String(l.document_id)) : l.document_id)));
+    await addRows("doc_items", lines);
+    await batchWrite(stmts);
   } catch (e) {
     return NextResponse.json({ error: "Restore failed (your data was not changed): " + (e as Error).message }, { status: 500 });
   }
 
-  logAudit({ businessId: bid, userId: ctx.user.id, userName: ctx.user.name, action: "create", entity: "restore", summary: "Restored business from JSON backup" });
+  (await logAudit({ businessId: bid, userId: ctx.user.id, userName: ctx.user.name, action: "create", entity: "restore", summary: "Restored business from JSON backup" }));
   return NextResponse.json({ ok: true });
 }

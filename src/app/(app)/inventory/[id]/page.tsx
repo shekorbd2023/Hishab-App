@@ -12,9 +12,9 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
   const ctx = await requireCtx();
   if (!ctx) redirect("/login");
   const bid = ctx.business.id;
-  const items = loadItems(bid);
+  const items = (await loadItems(bid));
   const item = items.find((i) => i.id === id);
   if (!item) notFound();
-  const activity = itemActivity(bid, id).reverse();
-  return <ItemDetail items={items} item={item} activity={activity} categories={itemCategories(bid)} />;
+  const activity = (await itemActivity(bid, id)).reverse();
+  return <ItemDetail items={items} item={item} activity={activity} categories={(await itemCategories(bid))} />;
 }

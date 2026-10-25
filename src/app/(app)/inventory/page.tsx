@@ -9,5 +9,5 @@ export default async function InventoryPage() {
   const ctx = await requireCtx();
   if (!ctx) redirect("/login");
   const bid = ctx.business.id;
-  return <ItemsTable items={loadItems(bid)} categories={itemCategories(bid)} />;
+  return <ItemsTable items={(await loadItems(bid))} categories={(await itemCategories(bid))} />;
 }

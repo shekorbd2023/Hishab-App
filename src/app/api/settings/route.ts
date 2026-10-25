@@ -19,15 +19,15 @@ export async function POST(req: Request) {
   if (b.op === "account") {
     const name = String(b.name || "").trim();
     if (!name) return NextResponse.json({ error: "Enter your name." }, { status: 400 });
-    run("UPDATE users SET name=? WHERE id=?", [name, ctx.user.id]);
+    (await run("UPDATE users SET name=? WHERE id=?", [name, ctx.user.id]));
     if (b.new_password) {
-      const u = get<{ password_hash: string }>("SELECT password_hash FROM users WHERE id=?", [ctx.user.id]);
+      const u = (await get<{ password_hash: string }>("SELECT password_hash FROM users WHERE id=?", [ctx.user.id]));
       // The Owner, signed in on the desktop app on their own computer, may set a new password without the old one.
       const ownerOnDesktop = ctx.role === "Owner" && isLocalRequest(req) && !b.current_password;
       if (!u || (!ownerOnDesktop && !verifyPassword(String(b.current_password || ""), u.password_hash))) return NextResponse.json({ error: "Current password is wrong." }, { status: 400 });
       if (String(b.new_password).length < 6) return NextResponse.json({ error: "New password must be at least 6 characters." }, { status: 400 });
-      run("UPDATE users SET password_hash=? WHERE id=?", [hashPassword(String(b.new_password)), ctx.user.id]);
-      logAudit({ businessId: bid, userId: ctx.user.id, userName: ctx.user.name, action: "update", entity: "user", entityId: ctx.user.id, summary: ownerOnDesktop ? "Password changed by Owner on desktop (no current password)" : "Password changed" });
+      (await run("UPDATE users SET password_hash=? WHERE id=?", [hashPassword(String(b.new_password)), ctx.user.id]));
+      (await logAudit({ businessId: bid, userId: ctx.user.id, userName: ctx.user.name, action: "update", entity: "user", entityId: ctx.user.id, summary: ownerOnDesktop ? "Password changed by Owner on desktop (no current password)" : "Password changed" }));
     }
     return NextResponse.json({ ok: true });
   }
@@ -38,8 +38,8 @@ export async function POST(req: Request) {
   if (b.op === "business") {
     const sets: string[] = [], vals: unknown[] = [];
     for (const f of BIZ_FIELDS) if (f in b) { sets.push(`${f}=?`); vals.push(b[f] === "" ? null : b[f]); }
-    if (sets.length) run(`UPDATE businesses SET ${sets.join(", ")} WHERE id=?`, [...vals, bid]);
-    logAudit({ businessId: bid, userId: ctx.user.id, userName: ctx.user.name, action: "update", entity: "business", summary: "Updated business profile" });
+    if (sets.length) (await run(`UPDATE businesses SET ${sets.join(", ")} WHERE id=?`, [...vals, bid]));
+    (await logAudit({ businessId: bid, userId: ctx.user.id, userName: ctx.user.name, action: "update", entity: "business", summary: "Updated business profile" }));
     return NextResponse.json({ ok: true });
   }
 
@@ -47,16 +47,16 @@ export async function POST(req: Request) {
   if (b.op === "settings") {
     const patch: Partial<BizSettings> = {};
     for (const [k, v] of Object.entries(b.patch || {})) if (k in SETTINGS_DEFAULTS) (patch as Record<string, unknown>)[k] = v;
-    saveSettings(bid, patch);
-    logAudit({ businessId: bid, userId: ctx.user.id, userName: ctx.user.name, action: "update", entity: "settings", summary: `Updated settings: ${Object.keys(patch).join(", ")}` });
-    return NextResponse.json({ ok: true, settings: getSettings(bid) });
+    (await saveSettings(bid, patch));
+    (await logAudit({ businessId: bid, userId: ctx.user.id, userName: ctx.user.name, action: "update", entity: "settings", summary: `Updated settings: ${Object.keys(patch).join(", ")}` }));
+    return NextResponse.json({ ok: true, settings: (await getSettings(bid)) });
   }
 
   // --- Legacy form (old /settings page) — only when no op is given, so a typo'd op can't wipe the profile
   if (b.op) return NextResponse.json({ error: "Unknown op" }, { status: 400 });
-  run("UPDATE businesses SET name=?, address=?, phone=?, currency_symbol=?, logo=? WHERE id=?",
-    [b.name || ctx.business.name, b.address ?? null, b.phone ?? null, b.currency_symbol || "Tk.", b.logo ?? null, bid]);
-  saveSettings(bid, { invoice_footer: b.invoice_footer ?? "", default_tax: Number(b.default_tax) || 0, show_logo: !!b.show_logo, show_business_logo: !!b.show_logo });
-  logAudit({ businessId: bid, userId: ctx.user.id, userName: ctx.user.name, action: "update", entity: "settings", summary: "Updated business settings" });
+  (await run("UPDATE businesses SET name=?, address=?, phone=?, currency_symbol=?, logo=? WHERE id=?",
+        [b.name || ctx.business.name, b.address ?? null, b.phone ?? null, b.currency_symbol || "Tk.", b.logo ?? null, bid]));
+  (await saveSettings(bid, { invoice_footer: b.invoice_footer ?? "", default_tax: Number(b.default_tax) || 0, show_logo: !!b.show_logo, show_business_logo: !!b.show_logo }));
+  (await logAudit({ businessId: bid, userId: ctx.user.id, userName: ctx.user.name, action: "update", entity: "settings", summary: "Updated business settings" }));
   return NextResponse.json({ ok: true });
 }

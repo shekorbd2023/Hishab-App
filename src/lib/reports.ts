@@ -145,14 +145,14 @@ function splitLabel(label: string): { particular: string; no: string } {
   const m = label.match(/^(.*) #(\S+)$/);
   return m ? { particular: m[1], no: m[2] } : { particular: label, no: "" };
 }
-const partyOptions = (bid: string): PickOpt[] => {
-  const bal = partyBalances(bid);
-  return all<{ id: string; name: string; phone: string | null }>("SELECT id, name, phone FROM parties WHERE business_id=? ORDER BY name COLLATE NOCASE", [bid])
+const partyOptions = async (bid: string): Promise<PickOpt[]> => {
+  const bal = (await partyBalances(bid));
+  return (await all<{ id: string; name: string; phone: string | null }>("SELECT id, name, phone FROM parties WHERE business_id=? ORDER BY name COLLATE NOCASE", [bid]))
     .map((p) => { const b = bal[p.id] || 0; return { id: p.id, label: p.name, sub: p.phone || undefined, right: b ? tk(Math.abs(b)) : "Settled", rightTone: b > 0 ? "pos" : b < 0 ? "neg" : undefined }; });
 };
 
 /* ============================== Builder ============================== */
-export function buildReport(bid: string, type: string, sp: SP): Report {
+export async function buildReport(bid: string, type: string, sp: SP): Promise<Report> {
   switch (type) {
     case "sales": case "purchase": case "sales-return": case "purchase-return": return docReport(bid, type, sp);
     case "day-book": return dayBook(bid, sp);
@@ -174,18 +174,18 @@ export function buildReport(bid: string, type: string, sp: SP): Report {
 }
 
 /* ---------- Sales / Purchase / Returns ---------- */
-function docReport(bid: string, type: string, sp: SP): Report {
+async function docReport(bid: string, type: string, sp: SP): Promise<Report> {
   const kind = KIND_OF[type];
   const date = resolveRange(sp, "month");
   const status = ["paid", "unpaid", "partial"].includes(sp.status || "") ? sp.status! : "all";
   const params: unknown[] = [bid, kind, date.from, date.to];
   let where = "d.business_id=? AND d.kind=? AND d.date>=? AND d.date<=?";
   if (status !== "all") { where += " AND d.status=?"; params.push(status); }
-  const docs = all<{ id: string; number: number; date: string; created_at: string; total: number; status: string; pname: string | null; pid: string | null; rec: number }>(
-    `SELECT d.id, d.number, d.date, d.created_at, d.total, d.status, p.name pname, p.id pid,
+  const docs = (await all<{ id: string; number: number; date: string; created_at: string; total: number; status: string; pname: string | null; pid: string | null; rec: number }>(
+      `SELECT d.id, d.number, d.date, d.created_at, d.total, d.status, p.name pname, p.id pid,
        (SELECT COALESCE(SUM(amount),0) FROM payments WHERE document_id=d.id) rec
      FROM documents d LEFT JOIN parties p ON p.id=d.party_id WHERE ${where}
-     ORDER BY d.date DESC, d.created_at DESC`, params);
+     ORDER BY d.date DESC, d.created_at DESC`, params));
   const inbound = type === "sales" || type === "purchase-return"; // money comes to us
   const recLabel = inbound ? "Received Amount" : "Paid Amount";
   const noun = { sales: "Sales", purchase: "Purchase", "sales-return": "Sales Return", "purchase-return": "Purchase Return" }[type]!;
@@ -219,52 +219,52 @@ function docReport(bid: string, type: string, sp: SP): Report {
 
 /* ---------- Unified transaction feed (Day Book + All Transactions) ---------- */
 type Tx = { id: string; date: string; created: string; type: string; label: string; name: string; total: number; paid: number; moneyIn: number; moneyOut: number; href?: string; status?: string };
-function transactions(bid: string, from: string, to: string): Tx[] {
+async function transactions(bid: string, from: string, to: string): Promise<Tx[]> {
   const out: Tx[] = [];
   const DOC_IN: Record<string, boolean> = { sales_invoice: true, purchase_return: true, sales_return: false, purchase_bill: false };
-  for (const d of all<{ id: string; kind: string; number: number; date: string; created_at: string; total: number; status: string; pname: string | null; rec: number }>(
-    `SELECT d.id, d.kind, d.number, d.date, d.created_at, d.total, d.status, p.name pname,
+  for (const d of (await all<{ id: string; kind: string; number: number; date: string; created_at: string; total: number; status: string; pname: string | null; rec: number }>(
+      `SELECT d.id, d.kind, d.number, d.date, d.created_at, d.total, d.status, p.name pname,
        (SELECT COALESCE(SUM(amount),0) FROM payments WHERE document_id=d.id) rec
      FROM documents d LEFT JOIN parties p ON p.id=d.party_id
-     WHERE d.business_id=? AND d.kind!='quotation' AND d.date>=? AND d.date<=?`, [bid, from, to])) {
+     WHERE d.business_id=? AND d.kind!='quotation' AND d.date>=? AND d.date<=?`, [bid, from, to]))) {
     const inb = DOC_IN[d.kind];
     const paid = Math.min(d.rec, d.total);
     out.push({ id: "d" + d.id, date: d.date, created: d.created_at, type: d.kind, label: docLabel(d.kind, d.number), name: d.pname || "Cash Sale", total: d.total, paid, moneyIn: inb ? paid : 0, moneyOut: inb ? 0 : paid, href: docHref(d.id), status: d.status });
   }
   // payments made with a document are already counted on the document row
-  for (const p of all<{ id: string; kind: string; number: number; date: string; created_at: string; amount: number; pname: string | null }>(
-    `SELECT p.id, p.kind, p.number, p.date, p.created_at, p.amount, pa.name pname FROM payments p LEFT JOIN parties pa ON pa.id=p.party_id
-     WHERE p.business_id=? AND p.document_id IS NULL AND p.date>=? AND p.date<=?`, [bid, from, to])) {
+  for (const p of (await all<{ id: string; kind: string; number: number; date: string; created_at: string; amount: number; pname: string | null }>(
+      `SELECT p.id, p.kind, p.number, p.date, p.created_at, p.amount, pa.name pname FROM payments p LEFT JOIN parties pa ON pa.id=p.party_id
+     WHERE p.business_id=? AND p.document_id IS NULL AND p.date>=? AND p.date<=?`, [bid, from, to]))) {
     const inb = p.kind === "in";
     out.push({ id: "p" + p.id, date: p.date, created: p.created_at, type: inb ? "payment_in" : "payment_out", label: `${inb ? "Payment In" : "Payment Out"} #${p.number}`, name: p.pname || "--", total: p.amount, paid: p.amount, moneyIn: inb ? p.amount : 0, moneyOut: inb ? 0 : p.amount, href: `/receipt/${p.id}` });
   }
-  for (const e of all<{ id: string; number: number; date: string; created_at: string; amount: number; category: string | null }>(
-    "SELECT id, number, date, created_at, amount, category FROM expenses WHERE business_id=? AND date>=? AND date<=?", [bid, from, to]))
+  for (const e of (await all<{ id: string; number: number; date: string; created_at: string; amount: number; category: string | null }>(
+      "SELECT id, number, date, created_at, amount, category FROM expenses WHERE business_id=? AND date>=? AND date<=?", [bid, from, to])))
     out.push({ id: "e" + e.id, date: e.date, created: e.created_at, type: "expense", label: `Expense #${e.number}`, name: e.category || "Uncategorized", total: e.amount, paid: e.amount, moneyIn: 0, moneyOut: e.amount, href: "/expense" });
-  for (const i of all<{ id: string; number: number; date: string; created_at: string; amount: number; category: string | null }>(
-    "SELECT id, number, date, created_at, amount, category FROM incomes WHERE business_id=? AND date>=? AND date<=?", [bid, from, to]))
+  for (const i of (await all<{ id: string; number: number; date: string; created_at: string; amount: number; category: string | null }>(
+      "SELECT id, number, date, created_at, amount, category FROM incomes WHERE business_id=? AND date>=? AND date<=?", [bid, from, to])))
     out.push({ id: "i" + i.id, date: i.date, created: i.created_at, type: "income", label: `Income #${i.number}`, name: i.category || "Uncategorized", total: i.amount, paid: i.amount, moneyIn: i.amount, moneyOut: 0, href: "/income" });
   return out;
 }
-function extraMovements(bid: string, from: string, to: string): Tx[] {
+async function extraMovements(bid: string, from: string, to: string): Promise<Tx[]> {
   const out: Tx[] = [];
-  for (const t of all<{ id: string; date: string; created_at: string; amount: number; fname: string | null; tname: string | null }>(
-    `SELECT t.id, t.date, t.created_at, t.amount, fa.name fname, ta.name tname FROM transfers t
+  for (const t of (await all<{ id: string; date: string; created_at: string; amount: number; fname: string | null; tname: string | null }>(
+      `SELECT t.id, t.date, t.created_at, t.amount, fa.name fname, ta.name tname FROM transfers t
      LEFT JOIN accounts fa ON fa.id=t.from_account_id LEFT JOIN accounts ta ON ta.id=t.to_account_id
-     WHERE t.business_id=? AND t.date>=? AND t.date<=?`, [bid, from, to]))
+     WHERE t.business_id=? AND t.date>=? AND t.date<=?`, [bid, from, to])))
     out.push({ id: "t" + t.id, date: t.date, created: t.created_at, type: "transfer", label: "Transfer Balance", name: `${t.fname || "?"} → ${t.tname || "?"}`, total: t.amount, paid: t.amount, moneyIn: 0, moneyOut: 0 });
-  for (const a of all<{ id: string; kind: string; date: string; created_at: string; amount: number; aname: string | null; note: string | null }>(
-    `SELECT a.id, a.kind, a.date, a.created_at, a.amount, ac.name aname, a.note FROM account_adjustments a LEFT JOIN accounts ac ON ac.id=a.account_id
-     WHERE a.business_id=? AND a.date>=? AND a.date<=?`, [bid, from, to])) {
+  for (const a of (await all<{ id: string; kind: string; date: string; created_at: string; amount: number; aname: string | null; note: string | null }>(
+      `SELECT a.id, a.kind, a.date, a.created_at, a.amount, ac.name aname, a.note FROM account_adjustments a LEFT JOIN accounts ac ON ac.id=a.account_id
+     WHERE a.business_id=? AND a.date>=? AND a.date<=?`, [bid, from, to]))) {
     const add = a.kind === "add";
     out.push({ id: "a" + a.id, date: a.date, created: a.created_at, type: add ? "add_money" : "reduce_money", label: add ? "Add Money" : "Reduce Money", name: a.aname || "--", total: a.amount, paid: a.amount, moneyIn: add ? a.amount : 0, moneyOut: add ? 0 : a.amount });
   }
   return out;
 }
 
-function dayBook(bid: string, sp: SP): Report {
+async function dayBook(bid: string, sp: SP): Promise<Report> {
   const date = resolveRange(sp, "today");
-  const list = [...transactions(bid, date.from, date.to), ...extraMovements(bid, date.from, date.to)];
+  const list = [...(await transactions(bid, date.from, date.to)), ...(await extraMovements(bid, date.from, date.to))];
   const mi = list.reduce((a, t) => a + t.moneyIn, 0), mo = list.reduce((a, t) => a + t.moneyOut, 0);
   return {
     type: "day-book", title: "Day Book", fileTitle: "Day Book", date, filters: [],
@@ -290,10 +290,10 @@ const TTYPE_OPTS = [
   { v: "payment_in", l: "Payment In" }, { v: "payment_out", l: "Payment Out" }, { v: "sales_return", l: "Sales Return" },
   { v: "purchase_return", l: "Purchase Return" }, { v: "expense", l: "Expense" }, { v: "income", l: "Income" },
 ];
-function allTransactions(bid: string, sp: SP): Report {
+async function allTransactions(bid: string, sp: SP): Promise<Report> {
   const date = resolveRange(sp, "month");
   const ttype = TTYPE_OPTS.some((o) => o.v === sp.ttype) ? sp.ttype! : "all";
-  const listAll = transactions(bid, date.from, date.to);
+  const listAll = (await transactions(bid, date.from, date.to));
   const list = ttype === "all" ? listAll : listAll.filter((t) => t.type === ttype);
   const sum = (k: string) => listAll.filter((t) => t.type === k).reduce((a, t) => a + t.total, 0);
   return {
@@ -315,26 +315,26 @@ function allTransactions(bid: string, sp: SP): Report {
 }
 
 /* ---------- Stock at a date (opening stock counts from the beginning) ---------- */
-function stockMoves(bid: string, from: string, to: string) {
+async function stockMoves(bid: string, from: string, to: string) {
   // per item: qty before `from`, qty in / out within [from, to]
   const m: Record<string, { before: number; inQ: number; outQ: number }> = {};
   const g = (id: string) => (m[id] ||= { before: 0, inQ: 0, outQ: 0 });
-  for (const r of all<{ item_id: string; kind: string; b: number; w: number }>(
-    `SELECT di.item_id, d.kind, SUM(CASE WHEN d.date < ? THEN di.qty ELSE 0 END) b,
+  for (const r of (await all<{ item_id: string; kind: string; b: number; w: number }>(
+      `SELECT di.item_id, d.kind, SUM(CASE WHEN d.date < ? THEN di.qty ELSE 0 END) b,
        SUM(CASE WHEN d.date >= ? AND d.date <= ? THEN di.qty ELSE 0 END) w
      FROM doc_items di JOIN documents d ON d.id=di.document_id
      WHERE d.business_id=? AND di.item_id IS NOT NULL AND d.kind IN ('sales_invoice','purchase_bill','sales_return','purchase_return')
-     GROUP BY di.item_id, d.kind`, [from, from, to, bid])) {
+     GROUP BY di.item_id, d.kind`, [from, from, to, bid]))) {
     const sign = r.kind === "purchase_bill" || r.kind === "sales_return" ? 1 : -1;
     const x = g(r.item_id);
     x.before += sign * r.b;
     if (sign > 0) x.inQ += r.w; else x.outQ += r.w;
   }
-  for (const a of all<{ item_id: string; b: number; pin: number; pout: number }>(
-    `SELECT item_id, SUM(CASE WHEN date < ? THEN qty_delta ELSE 0 END) b,
+  for (const a of (await all<{ item_id: string; b: number; pin: number; pout: number }>(
+      `SELECT item_id, SUM(CASE WHEN date < ? THEN qty_delta ELSE 0 END) b,
        SUM(CASE WHEN date >= ? AND date <= ? AND qty_delta > 0 THEN qty_delta ELSE 0 END) pin,
        SUM(CASE WHEN date >= ? AND date <= ? AND qty_delta < 0 THEN -qty_delta ELSE 0 END) pout
-     FROM stock_adjustments WHERE business_id=? GROUP BY item_id`, [from, from, to, from, to, bid])) {
+     FROM stock_adjustments WHERE business_id=? GROUP BY item_id`, [from, from, to, from, to, bid]))) {
     const x = g(a.item_id);
     x.before += a.b; x.inQ += a.pin; x.outQ += a.pout;
   }
@@ -342,28 +342,28 @@ function stockMoves(bid: string, from: string, to: string) {
 }
 
 /* ---------- Profit & Loss ---------- */
-function profitLoss(bid: string, sp: SP): Report {
+async function profitLoss(bid: string, sp: SP): Promise<Report> {
   const date = resolveRange(sp, "month");
   const stockBased = sp.stock === "1";
-  const lineSum = (kind: string) => get<{ s: number }>(
-    `SELECT COALESCE(SUM(di.amount),0) s FROM doc_items di JOIN documents d ON d.id=di.document_id
-     WHERE d.business_id=? AND d.kind=? AND d.date>=? AND d.date<=?`, [bid, kind, date.from, date.to])?.s ?? 0;
-  const salesLines = lineSum("sales_invoice"), returnLines = lineSum("sales_return");
+  const lineSum = async (kind: string) => (await get<{ s: number }>(
+      `SELECT COALESCE(SUM(di.amount),0) s FROM doc_items di JOIN documents d ON d.id=di.document_id
+     WHERE d.business_id=? AND d.kind=? AND d.date>=? AND d.date<=?`, [bid, kind, date.from, date.to]))?.s ?? 0;
+  const salesLines = (await lineSum("sales_invoice")), returnLines = (await lineSum("sales_return"));
   const netSales = salesLines - returnLines;
 
   let cogs = 0;
   const cogsChildren: RRow[] = [];
   if (!stockBased) {
-    const costOf = (kind: string) => get<{ s: number }>(
-      `SELECT COALESCE(SUM(di.qty*i.purchase_price),0) s FROM doc_items di JOIN documents d ON d.id=di.document_id JOIN items i ON i.id=di.item_id
-       WHERE d.business_id=? AND d.kind=? AND d.date>=? AND d.date<=?`, [bid, kind, date.from, date.to])?.s ?? 0;
-    const sold = costOf("sales_invoice"), ret = costOf("sales_return");
+    const costOf = async (kind: string) => (await get<{ s: number }>(
+          `SELECT COALESCE(SUM(di.qty*i.purchase_price),0) s FROM doc_items di JOIN documents d ON d.id=di.document_id JOIN items i ON i.id=di.item_id
+       WHERE d.business_id=? AND d.kind=? AND d.date>=? AND d.date<=?`, [bid, kind, date.from, date.to]))?.s ?? 0;
+    const sold = (await costOf("sales_invoice")), ret = (await costOf("sales_return"));
     cogs = sold - ret;
     cogsChildren.push({ id: "c1", c: { p: "Cost of items sold (qty × purchase price)", a: r2(sold) } });
     if (ret) cogsChildren.push({ id: "c2", c: { p: "Less: cost of items returned", a: -r2(ret) } });
   } else {
-    const items = all<{ id: string; opening_stock: number; purchase_price: number }>("SELECT id, opening_stock, purchase_price FROM items WHERE business_id=?", [bid]);
-    const mv = stockMoves(bid, date.from, date.to);
+    const items = (await all<{ id: string; opening_stock: number; purchase_price: number }>("SELECT id, opening_stock, purchase_price FROM items WHERE business_id=?", [bid]));
+    const mv = (await stockMoves(bid, date.from, date.to));
     let open = 0, close = 0;
     for (const it of items) {
       const x = mv[it.id] || { before: 0, inQ: 0, outQ: 0 };
@@ -371,7 +371,7 @@ function profitLoss(bid: string, sp: SP): Report {
       open += o * it.purchase_price;
       close += (o + x.inQ - x.outQ) * it.purchase_price;
     }
-    const purchases = lineSum("purchase_bill") - lineSum("purchase_return");
+    const purchases = (await lineSum("purchase_bill")) - (await lineSum("purchase_return"));
     cogs = open + purchases - close;
     cogsChildren.push(
       { id: "c1", c: { p: "Opening stock value", a: r2(open) } },
@@ -381,11 +381,11 @@ function profitLoss(bid: string, sp: SP): Report {
   }
   const gross = netSales - cogs;
 
-  const docAgg = get<{ ch: number; dd: number; ro: number }>(
-    `SELECT COALESCE(SUM((SELECT COALESCE(SUM(json_extract(value,'$.amount')),0) FROM json_each(COALESCE(d.charges,'[]')))),0) ch,
+  const docAgg = (await get<{ ch: number; dd: number; ro: number }>(
+      `SELECT COALESCE(SUM((SELECT COALESCE(SUM(json_extract(value,'$.amount')),0) FROM json_each(COALESCE(d.charges,'[]')))),0) ch,
        COALESCE(SUM(d.doc_discount),0) dd, COALESCE(SUM(d.round_off),0) ro
-     FROM documents d WHERE d.business_id=? AND d.kind='sales_invoice' AND d.date>=? AND d.date<=?`, [bid, date.from, date.to]) || { ch: 0, dd: 0, ro: 0 };
-  const incCats = all<{ category: string | null; s: number }>("SELECT category, SUM(amount) s FROM incomes WHERE business_id=? AND date>=? AND date<=? GROUP BY category ORDER BY s DESC", [bid, date.from, date.to]);
+     FROM documents d WHERE d.business_id=? AND d.kind='sales_invoice' AND d.date>=? AND d.date<=?`, [bid, date.from, date.to])) || { ch: 0, dd: 0, ro: 0 };
+  const incCats = (await all<{ category: string | null; s: number }>("SELECT category, SUM(amount) s FROM incomes WHERE business_id=? AND date>=? AND date<=? GROUP BY category ORDER BY s DESC", [bid, date.from, date.to]));
   const incChildren: RRow[] = [
     ...incCats.map((c, i) => ({ id: "i" + i, c: { p: c.category || "Uncategorized", a: r2(c.s) } as Record<string, Cell> })),
     ...(docAgg.ch ? [{ id: "ich", c: { p: "Additional charges on invoices", a: r2(docAgg.ch) } }] : []),
@@ -393,7 +393,7 @@ function profitLoss(bid: string, sp: SP): Report {
     ...(docAgg.ro ? [{ id: "iro", c: { p: "Round off", a: r2(docAgg.ro) } }] : []),
   ];
   const otherIncome = incCats.reduce((a, c) => a + c.s, 0) + docAgg.ch - docAgg.dd + docAgg.ro;
-  const expCats = all<{ category: string | null; s: number }>("SELECT category, SUM(amount) s FROM expenses WHERE business_id=? AND date>=? AND date<=? GROUP BY category ORDER BY s DESC", [bid, date.from, date.to]);
+  const expCats = (await all<{ category: string | null; s: number }>("SELECT category, SUM(amount) s FROM expenses WHERE business_id=? AND date>=? AND date<=? GROUP BY category ORDER BY s DESC", [bid, date.from, date.to]));
   const expenses = expCats.reduce((a, c) => a + c.s, 0);
   const net = gross + otherIncome - expenses;
 
@@ -423,11 +423,11 @@ function profitLoss(bid: string, sp: SP): Report {
 }
 
 /* ---------- Party Statement ---------- */
-function partyStatement(bid: string, sp: SP): Report {
+async function partyStatement(bid: string, sp: SP): Promise<Report> {
   const date = resolveRange(sp, "month");
-  const opts = partyOptions(bid);
+  const opts = (await partyOptions(bid));
   const pid = sp.party || sp.partyId || null;
-  const party = pid ? get<{ id: string; name: string; phone: string | null }>("SELECT id, name, phone FROM parties WHERE id=? AND business_id=?", [pid, bid]) : undefined;
+  const party = pid ? (await get<{ id: string; name: string; phone: string | null }>("SELECT id, name, phone FROM parties WHERE id=? AND business_id=?", [pid, bid])) : undefined;
   const view = sp.view === "accounting" ? "accounting" : "normal";
   const withItems = sp.items === "1";
   const base: Report = {
@@ -442,7 +442,7 @@ function partyStatement(bid: string, sp: SP): Report {
   };
   if (!party) return base;
 
-  const ledger = partyLedger(bid, party.id);
+  const ledger = (await partyLedger(bid, party.id));
   // Normal view: fold "received with invoice" payments into their document row
   type L = { key: string; date: string; label: string; debit: number; credit: number; balance: number; href?: string; ref: string | null; refKind: string | null; type: string; remarks: string | null };
   let rows: L[] = ledger.map((r) => ({ key: r.key, date: r.date, label: r.label, debit: r.debit, credit: r.credit, balance: r.balance, href: refHref(r.refKind, r.ref), ref: r.ref, refKind: r.refKind, type: r.type, remarks: r.remarks }));
@@ -465,8 +465,8 @@ function partyStatement(bid: string, sp: SP): Report {
   const itemsByDoc: Record<string, { name: string; qty: number; unit: string | null; rate: number; amount: number }[]> = {};
   if (withItems) {
     const ids = inRange.filter((r) => r.refKind === "doc" && r.type !== "payment_in" && r.type !== "payment_out").map((r) => r.ref!);
-    if (ids.length) for (const it of all<{ document_id: string; name: string; qty: number; unit: string | null; rate: number; amount: number }>(
-      `SELECT document_id, name, qty, unit, rate, amount FROM doc_items WHERE document_id IN (${ids.map(() => "?").join(",")}) ORDER BY rowid`, ids))
+    if (ids.length) for (const it of (await all<{ document_id: string; name: string; qty: number; unit: string | null; rate: number; amount: number }>(
+          `SELECT document_id, name, qty, unit, rate, amount FROM doc_items WHERE document_id IN (${ids.map(() => "?").join(",")}) ORDER BY rowid`, ids)))
       (itemsByDoc[it.document_id] ||= []).push(it);
   }
   const balSuffix = (b: number) => (view === "accounting" ? (b > 0 ? " Dr" : b < 0 ? " Cr" : "") : "");
@@ -496,12 +496,12 @@ function partyStatement(bid: string, sp: SP): Report {
 }
 
 /* ---------- All Party ---------- */
-function allParty(bid: string, sp: SP): Report {
-  const bal = partyBalances(bid);
+async function allParty(bid: string, sp: SP): Promise<Report> {
+  const bal = (await partyBalances(bid));
   const ptype = ["customer", "supplier"].includes(sp.ptype || "") ? sp.ptype! : "all";
   const pay = ["receivable", "payable", "settled"].includes(sp.pay || "") ? sp.pay! : "all";
-  let parties = all<{ id: string; name: string; phone: string | null; type: string; category: string | null }>(
-    "SELECT id, name, phone, type, category FROM parties WHERE business_id=? ORDER BY name COLLATE NOCASE", [bid]);
+  let parties = (await all<{ id: string; name: string; phone: string | null; type: string; category: string | null }>(
+      "SELECT id, name, phone, type, category FROM parties WHERE business_id=? ORDER BY name COLLATE NOCASE", [bid]));
   const everyRecv = parties.reduce((a, p) => a + Math.max(bal[p.id] || 0, 0), 0);
   const everyPay = parties.reduce((a, p) => a + Math.max(-(bal[p.id] || 0), 0), 0);
   if (ptype !== "all") parties = parties.filter((p) => p.type === ptype || p.type === "both");
@@ -541,10 +541,10 @@ function catFilter(items: ItemRow[], value: string): Filter {
 }
 const ITEM_SORT = [{ v: "name_az", l: "Name A → Z" }, { v: "name_za", l: "Name Z → A" }, { v: "qty_desc", l: "Quantity High → Low" }, { v: "qty_asc", l: "Quantity Low → High" }];
 
-function itemDetail(bid: string, sp: SP): Report {
+async function itemDetail(bid: string, sp: SP): Promise<Report> {
   const date = resolveRange(sp, "month");
-  const items = itemsOf(bid);
-  const stocks = itemStocks(bid);
+  const items = (await itemsOf(bid));
+  const stocks = (await itemStocks(bid));
   const opts: PickOpt[] = items.map((i) => { const s = stocks[i.id] || 0; return { id: i.id, label: i.name, sub: i.category || undefined, right: `${fq(s)} ${i.unit || ""}`.trim(), rightTone: s < 0 ? "neg" : undefined }; });
   const it = items.find((i) => i.id === (sp.item || sp.itemId));
   const base: Report = {
@@ -554,7 +554,7 @@ function itemDetail(bid: string, sp: SP): Report {
     empty: { title: "Item Not Selected", text: "Select an item above to see its stock activity.", icon: "box" },
   };
   if (!it) return base;
-  const act = itemActivity(bid, it.id);
+  const act = (await itemActivity(bid, it.id));
   const before = act.filter((a) => a.date < date.from);
   const inRange = act.filter((a) => a.date >= date.from && a.date <= date.to);
   const open = before.length ? before[before.length - 1].qty : 0;
@@ -586,9 +586,9 @@ function itemDetail(bid: string, sp: SP): Report {
   };
 }
 
-function itemList(bid: string, sp: SP): Report {
-  let items = itemsOf(bid);
-  const stocks = itemStocks(bid);
+async function itemList(bid: string, sp: SP): Promise<Report> {
+  let items = (await itemsOf(bid));
+  const stocks = (await itemStocks(bid));
   const cat = sp.cat || "all";
   const f = catFilter(items, cat);
   if (cat !== "all") items = items.filter((i) => (i.category || "General") === cat);
@@ -612,9 +612,9 @@ function itemList(bid: string, sp: SP): Report {
   };
 }
 
-function lowStock(bid: string, sp: SP): Report {
-  const all_ = itemsOf(bid).filter((i) => i.type !== "Service");
-  const stocks = itemStocks(bid);
+async function lowStock(bid: string, sp: SP): Promise<Report> {
+  const all_ = (await itemsOf(bid)).filter((i) => i.type !== "Service");
+  const stocks = (await itemStocks(bid));
   const cat = sp.cat || "all";
   const f = catFilter(all_, cat);
   let items = all_.filter((i) => { const s = stocks[i.id] || 0; return s <= 0 || (i.low_stock_alert > 0 && s <= i.low_stock_alert); });
@@ -637,13 +637,13 @@ function lowStock(bid: string, sp: SP): Report {
   };
 }
 
-function stockQuantity(bid: string, sp: SP): Report {
+async function stockQuantity(bid: string, sp: SP): Promise<Report> {
   const date = resolveRange(sp, "month");
-  const all_ = itemsOf(bid).filter((i) => i.type !== "Service");
+  const all_ = (await itemsOf(bid)).filter((i) => i.type !== "Service");
   const cat = sp.cat || "all";
   const f = catFilter(all_, cat);
   const items = cat === "all" ? all_ : all_.filter((i) => (i.category || "General") === cat);
-  const mv = stockMoves(bid, date.from, date.to);
+  const mv = (await stockMoves(bid, date.from, date.to));
   const rows = items.map((i) => {
     const x = mv[i.id] || { before: 0, inQ: 0, outQ: 0 };
     const open = (i.opening_stock || 0) + x.before;
@@ -670,13 +670,13 @@ function stockQuantity(bid: string, sp: SP): Report {
 }
 
 /* ---------- Income & Expense ---------- */
-function incomeExpense(bid: string, sp: SP): Report {
+async function incomeExpense(bid: string, sp: SP): Promise<Report> {
   const date = resolveRange(sp, "month");
   const side = ["income", "expense"].includes(sp.side || "") ? sp.side! : "all";
   const q = (tbl: string) => all<{ id: string; number: number; date: string; created_at: string; category: string | null; amount: number; note: string | null; aname: string | null }>(
     `SELECT e.id, e.number, e.date, e.created_at, e.category, e.amount, e.note, a.name aname FROM ${tbl} e LEFT JOIN accounts a ON a.id=e.account_id
      WHERE e.business_id=? AND e.date>=? AND e.date<=?`, [bid, date.from, date.to]);
-  const inc = q("incomes"), exp = q("expenses");
+  const inc = (await q("incomes")), exp = (await q("expenses"));
   const ti = inc.reduce((a, r) => a + r.amount, 0), te = exp.reduce((a, r) => a + r.amount, 0);
   const rows: RRow[] = [
     ...(side !== "expense" ? inc.map((r) => ({ id: "i" + r.id, href: "/income", c: { date: r.date, tx: `Income #${r.number}`, cat: r.category || "Uncategorized", mode: r.aname || "--", inc: r.amount, exp: null }, sub: r.note ? { tx: r.note } : undefined, sort: { d: r.date + r.created_at, a: r.amount, n: r.category || "" } })) : []),
@@ -698,12 +698,12 @@ function incomeExpense(bid: string, sp: SP): Report {
   };
 }
 
-function categoryReport(bid: string, type: string, sp: SP): Report {
+async function categoryReport(bid: string, type: string, sp: SP): Promise<Report> {
   const date = resolveRange(sp, "month");
   const isExp = type === "expense-category";
   const tbl = isExp ? "expenses" : "incomes";
-  const rows = all<{ category: string | null; n: number; s: number }>(
-    `SELECT category, COUNT(*) n, SUM(amount) s FROM ${tbl} WHERE business_id=? AND date>=? AND date<=? GROUP BY category ORDER BY s DESC`, [bid, date.from, date.to]);
+  const rows = (await all<{ category: string | null; n: number; s: number }>(
+      `SELECT category, COUNT(*) n, SUM(amount) s FROM ${tbl} WHERE business_id=? AND date>=? AND date<=? GROUP BY category ORDER BY s DESC`, [bid, date.from, date.to]));
   const total = rows.reduce((a, r) => a + r.s, 0);
   const word = isExp ? "Expense" : "Income";
   return {
@@ -721,13 +721,13 @@ function categoryReport(bid: string, type: string, sp: SP): Report {
 }
 
 /* ---------- Cash In Hand / Bank Statement ---------- */
-function accountStatement(bid: string, type: string, sp: SP): Report {
+async function accountStatement(bid: string, type: string, sp: SP): Promise<Report> {
   const date = resolveRange(sp, "month");
   const isCash = type === "cash-in-hand-statement";
-  const accts = all<{ id: string; name: string; type: string; bank_name: string | null; account_no: string | null }>(
-    "SELECT id, name, type, bank_name, account_no FROM accounts WHERE business_id=? ORDER BY created_at", [bid]);
+  const accts = (await all<{ id: string; name: string; type: string; bank_name: string | null; account_no: string | null }>(
+      "SELECT id, name, type, bank_name, account_no FROM accounts WHERE business_id=? ORDER BY created_at", [bid]));
   const list = accts.filter((a) => (isCash ? a.type === "cash" : a.type !== "cash"));
-  const bals = accountBalances(bid);
+  const bals = (await accountBalances(bid));
   const want = sp.account || sp.accountId;
   const acc = list.find((a) => a.id === want) || (want ? undefined : list[0]);
   const title = isCash ? "Cash In Hand Statement" : "Bank Statement";
@@ -739,8 +739,8 @@ function accountStatement(bid: string, type: string, sp: SP): Report {
     empty: { title: "Account Not Selected", text: isCash ? "Select a cash account above." : "Select a bank or wallet account above.", icon: isCash ? "cash" : "bank" },
   };
   if (!acc) return base;
-  const opening = get<{ opening_balance: number }>("SELECT opening_balance FROM accounts WHERE id=?", [acc.id])?.opening_balance || 0;
-  const led = accountLedger(bid, acc.id);
+  const opening = (await get<{ opening_balance: number }>("SELECT opening_balance FROM accounts WHERE id=?", [acc.id]))?.opening_balance || 0;
+  const led = (await accountLedger(bid, acc.id));
   const before = led.filter((r) => r.date < date.from);
   const inRange = led.filter((r) => r.date >= date.from && r.date <= date.to);
   const bf = before.length ? before[before.length - 1].balance : opening;
@@ -769,15 +769,15 @@ function accountStatement(bid: string, type: string, sp: SP): Report {
 }
 
 /* ---------- Discount ---------- */
-function discountReport(bid: string, sp: SP): Report {
+async function discountReport(bid: string, sp: SP): Promise<Report> {
   const date = resolveRange(sp, "month");
-  const rows = all<{ pid: string | null; pname: string | null; sd: number; pd: number; n: number }>(
-    `SELECT d.party_id pid, p.name pname,
+  const rows = (await all<{ pid: string | null; pname: string | null; sd: number; pd: number; n: number }>(
+      `SELECT d.party_id pid, p.name pname,
        SUM(CASE WHEN d.kind='sales_invoice' THEN d.discount_total ELSE 0 END) sd,
        SUM(CASE WHEN d.kind='purchase_bill' THEN d.discount_total ELSE 0 END) pd, COUNT(*) n
      FROM documents d LEFT JOIN parties p ON p.id=d.party_id
      WHERE d.business_id=? AND d.date>=? AND d.date<=? AND d.kind IN ('sales_invoice','purchase_bill') AND d.discount_total>0
-     GROUP BY d.party_id ORDER BY (sd+pd) DESC`, [bid, date.from, date.to]);
+     GROUP BY d.party_id ORDER BY (sd+pd) DESC`, [bid, date.from, date.to]));
   const sd = rows.reduce((a, r) => a + r.sd, 0), pd = rows.reduce((a, r) => a + r.pd, 0);
   return {
     type: "discount", title: "Discount Report", fileTitle: "Discount Report", date, filters: [],
@@ -795,13 +795,13 @@ function discountReport(bid: string, sp: SP): Report {
 }
 
 /* ---------- Tax ---------- */
-function taxReport(bid: string, type: string, sp: SP): Report {
+async function taxReport(bid: string, type: string, sp: SP): Promise<Report> {
   const date = resolveRange(sp, "month");
   const sales = type === "tax-sales";
   const kind = sales ? "sales_invoice" : "purchase_bill";
-  const docs = all<{ id: string; number: number; date: string; created_at: string; total: number; tax_total: number; pname: string | null }>(
-    `SELECT d.id, d.number, d.date, d.created_at, d.total, d.tax_total, p.name pname FROM documents d LEFT JOIN parties p ON p.id=d.party_id
-     WHERE d.business_id=? AND d.kind=? AND d.date>=? AND d.date<=? AND d.tax_total>0 ORDER BY d.date DESC`, [bid, kind, date.from, date.to]);
+  const docs = (await all<{ id: string; number: number; date: string; created_at: string; total: number; tax_total: number; pname: string | null }>(
+      `SELECT d.id, d.number, d.date, d.created_at, d.total, d.tax_total, p.name pname FROM documents d LEFT JOIN parties p ON p.id=d.party_id
+     WHERE d.business_id=? AND d.kind=? AND d.date>=? AND d.date<=? AND d.tax_total>0 ORDER BY d.date DESC`, [bid, kind, date.from, date.to]));
   const tax = docs.reduce((a, d) => a + d.tax_total, 0), total = docs.reduce((a, d) => a + d.total, 0);
   const w = sales ? "Sales" : "Purchase";
   return {

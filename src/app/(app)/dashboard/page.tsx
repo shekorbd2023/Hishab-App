@@ -21,30 +21,30 @@ export default async function Dashboard() {
   const { business, user } = ctx;
   const bid = business.id;
   const { t } = await getT();
-  const st = getSettings(bid);
+  const st = (await getSettings(bid));
   const sym = business.currency_symbol || "Tk.";
   const money = makeMoney(sym, st);
   const today = TODAY();
 
   // ---- KPIs
-  const { receivable, payable } = receivablePayableTotals(bid);
+  const { receivable, payable } = (await receivablePayableTotals(bid));
   const mFrom = startOfMonth(today), mTo = addDays(addMonths(mFrom, 1), -1);
-  const salesM = sumDocuments(bid, "sales_invoice", mFrom, mTo);
-  const purchaseM = sumDocuments(bid, "purchase_bill", mFrom, mTo);
-  const expenseM = sumExpenses(bid, mFrom, mTo);
+  const salesM = (await sumDocuments(bid, "sales_invoice", mFrom, mTo));
+  const purchaseM = (await sumDocuments(bid, "purchase_bill", mFrom, mTo));
+  const expenseM = (await sumExpenses(bid, mFrom, mTo));
 
   // ---- Cashflow: in = payments in + incomes + add-money; out = payments out + expenses + reduce-money (transfers excluded)
   const since = addMonths(startOfMonth(today), -11);
   const q = (sql: string) => all<Mov>(sql, [bid, since]);
   const inRows = [
-    ...q("SELECT substr(date,1,10) date, SUM(amount) s FROM payments WHERE business_id=? AND kind='in' AND date>=? GROUP BY 1"),
-    ...q("SELECT substr(date,1,10) date, SUM(amount) s FROM incomes WHERE business_id=? AND date>=? GROUP BY 1"),
-    ...q("SELECT substr(date,1,10) date, SUM(amount) s FROM account_adjustments WHERE business_id=? AND kind='add' AND date>=? GROUP BY 1"),
+    ...(await q("SELECT substr(date,1,10) date, SUM(amount) s FROM payments WHERE business_id=? AND kind='in' AND date>=? GROUP BY 1")),
+    ...(await q("SELECT substr(date,1,10) date, SUM(amount) s FROM incomes WHERE business_id=? AND date>=? GROUP BY 1")),
+    ...(await q("SELECT substr(date,1,10) date, SUM(amount) s FROM account_adjustments WHERE business_id=? AND kind='add' AND date>=? GROUP BY 1")),
   ];
   const outRows = [
-    ...q("SELECT substr(date,1,10) date, SUM(amount) s FROM payments WHERE business_id=? AND kind='out' AND date>=? GROUP BY 1"),
-    ...q("SELECT substr(date,1,10) date, SUM(amount) s FROM expenses WHERE business_id=? AND date>=? GROUP BY 1"),
-    ...q("SELECT substr(date,1,10) date, SUM(amount) s FROM account_adjustments WHERE business_id=? AND kind='reduce' AND date>=? GROUP BY 1"),
+    ...(await q("SELECT substr(date,1,10) date, SUM(amount) s FROM payments WHERE business_id=? AND kind='out' AND date>=? GROUP BY 1")),
+    ...(await q("SELECT substr(date,1,10) date, SUM(amount) s FROM expenses WHERE business_id=? AND date>=? GROUP BY 1")),
+    ...(await q("SELECT substr(date,1,10) date, SUM(amount) s FROM account_adjustments WHERE business_id=? AND kind='reduce' AND date>=? GROUP BY 1")),
   ];
   const toMap = (rows: Mov[]) => rows.reduce<Record<string, number>>((m, r) => { m[r.date] = (m[r.date] || 0) + r.s; return m; }, {});
   const inMap = toMap(inRows), outMap = toMap(outRows);
@@ -56,14 +56,14 @@ export default async function Dashboard() {
   const series = { daily: mk("daily", 7), weekly: mk("weekly", 8), monthly: mk("monthly", 12) };
 
   // ---- Accounts
-  const accts = all<{ id: string; name: string; type: string }>("SELECT id, name, type FROM accounts WHERE business_id=? ORDER BY created_at", [bid]);
-  const bal = accountBalances(bid);
+  const accts = (await all<{ id: string; name: string; type: string }>("SELECT id, name, type FROM accounts WHERE business_id=? ORDER BY created_at", [bid]));
+  const bal = (await accountBalances(bid));
   const totalBal = accts.reduce((a, x) => a + (bal[x.id] || 0), 0);
 
   // ---- Recent transactions
   type Tx = { id: string; src: string; kind: string; number: number; date: string; created_at: string; name: string | null; total: number };
-  const recent = all<Tx>(
-    `SELECT * FROM (
+  const recent = (await all<Tx>(
+      `SELECT * FROM (
        SELECT d.id, 'doc' src, d.kind, d.number, d.date, d.created_at, p.name, d.total FROM documents d LEFT JOIN parties p ON p.id=d.party_id
          WHERE d.business_id=? AND d.kind!='quotation'
        UNION ALL
@@ -74,12 +74,12 @@ export default async function Dashboard() {
        UNION ALL
        SELECT id, 'inc', 'income', number, date, created_at, category, amount FROM incomes WHERE business_id=?
      ) ORDER BY date DESC, created_at DESC LIMIT 8`, [bid, bid, bid, bid]
-  );
+    ));
   const docIds = recent.filter((r) => r.src === "doc").map((r) => r.id);
   const paidMap: Record<string, number> = {};
   if (docIds.length) {
-    for (const r of all<{ document_id: string; s: number }>(
-      `SELECT document_id, SUM(amount) s FROM payments WHERE document_id IN (${docIds.map(() => "?").join(",")}) GROUP BY document_id`, docIds)) paidMap[r.document_id] = r.s;
+    for (const r of (await all<{ document_id: string; s: number }>(
+          `SELECT document_id, SUM(amount) s FROM payments WHERE document_id IN (${docIds.map(() => "?").join(",")}) GROUP BY document_id`, docIds))) paidMap[r.document_id] = r.s;
   }
   const txLabel = (r: Tx) =>
     r.src === "doc" ? docLabel(r.kind, r.number)
@@ -88,11 +88,11 @@ export default async function Dashboard() {
   const txHref = (r: Tx) => (r.src === "doc" ? `/doc/${r.id}` : r.src === "pay" ? `/receipt/${r.id}` : r.src === "exp" ? "/expense" : "/income");
 
   // ---- Reminders
-  const reminders = all<{ id: string; due_date: string; note: string | null; pname: string | null }>(
-    `SELECT r.id, r.due_date, r.note, p.name pname FROM reminders r LEFT JOIN parties p ON p.id=r.party_id
+  const reminders = (await all<{ id: string; due_date: string; note: string | null; pname: string | null }>(
+      `SELECT r.id, r.due_date, r.note, p.name pname FROM reminders r LEFT JOIN parties p ON p.id=r.party_id
      WHERE r.business_id=? AND r.done=0 ORDER BY r.due_date ASC LIMIT 5`, [bid]
-  );
-  const remCount = all<{ c: number }>("SELECT COUNT(*) c FROM reminders WHERE business_id=? AND done=0", [bid])[0]?.c ?? 0;
+    ));
+  const remCount = (await all<{ c: number }>("SELECT COUNT(*) c FROM reminders WHERE business_id=? AND done=0", [bid]))[0]?.c ?? 0;
 
   const kpis = [
     { label: t("to_receive"), val: money(receivable), tone: "green", href: "/parties?filter=receivable", icon: "arrowDown" },

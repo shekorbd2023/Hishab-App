@@ -16,21 +16,21 @@ export async function POST(req: Request) {
   if (String(password).length < 6) {
     return NextResponse.json({ error: "Password must be at least 6 characters." }, { status: 400 });
   }
-  const existing = get("SELECT id FROM users WHERE email = ?", [String(email).trim().toLowerCase()]);
+  const existing = (await get("SELECT id FROM users WHERE email = ?", [String(email).trim().toLowerCase()]));
   if (existing) return NextResponse.json({ error: "Email already registered." }, { status: 409 });
 
   const userId = uid();
-  run("INSERT INTO users (id, email, name, password_hash, created_at) VALUES (?,?,?,?,?)", [
-    userId,
-    String(email).trim().toLowerCase(),
-    String(name).trim(),
-    hashPassword(String(password)),
-    nowIso(),
-  ]);
-  const businessId = createBusinessForUser(userId, businessName);
-  if (demo) seedDemo(businessId, userId, name);
+  (await run("INSERT INTO users (id, email, name, password_hash, created_at) VALUES (?,?,?,?,?)", [
+        userId,
+        String(email).trim().toLowerCase(),
+        String(name).trim(),
+        hashPassword(String(password)),
+        nowIso(),
+      ]));
+  const businessId = (await createBusinessForUser(userId, businessName));
+  if (demo) (await seedDemo(businessId, userId, name));
 
-  const token = createSession(userId);
+  const token = (await createSession(userId));
   const jar = await cookies();
   jar.set(SESSION_COOKIE, token, cookieOpts(req));
   jar.set(BUSINESS_COOKIE, businessId, cookieOpts(req, false));

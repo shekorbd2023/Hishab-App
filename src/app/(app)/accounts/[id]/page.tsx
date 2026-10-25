@@ -11,10 +11,10 @@ export default async function AccountPage({ params }: { params: Promise<{ id: st
   const ctx = await requireCtx();
   if (!ctx) redirect("/login");
   const bid = ctx.business.id;
-  const accounts = loadAccounts(bid);
+  const accounts = (await loadAccounts(bid));
   const account = accounts.find((a) => a.id === id);
   if (!account) notFound();
-  const ledger = accountLedger(bid, id).reverse();
+  const ledger = (await accountLedger(bid, id)).reverse();
   return (
     <AccountDetail
       account={account}

@@ -17,7 +17,7 @@ export default async function NewDocument({ searchParams }: { searchParams: Prom
   const sp = await searchParams;
   const kind = isDocKind(sp.kind) ? sp.kind : "sales_invoice";
   const bid = ctx.business.id;
-  const { parties, items, accounts } = editorData(bid);
+  const { parties, items, accounts } = (await editorData(bid));
   return (
     <DocumentEditor
       key={kind}
@@ -25,8 +25,8 @@ export default async function NewDocument({ searchParams }: { searchParams: Prom
       parties={parties}
       items={items}
       accounts={accounts}
-      settings={editorSettings(bid, kind)}
-      nextNumber={peekNextNumber(bid, kind)}
+      settings={(await editorSettings(bid, kind))}
+      nextNumber={(await peekNextNumber(bid, kind))}
       initialPartyId={sp.party && parties.some((p) => p.id === sp.party) ? sp.party : null}
     />
   );

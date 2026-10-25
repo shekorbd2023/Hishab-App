@@ -28,20 +28,20 @@ export default async function InsightsPage({ params }: { params: Promise<{ type:
 
   const txs: Tx[] = [];
   if (meta.kind) {
-    const docs = all<{ id: string; date: string; total: number; acc: string | null; party: string | null }>(
-      `SELECT d.id, d.date, d.total, a.name acc, p.name party FROM documents d
+    const docs = (await all<{ id: string; date: string; total: number; acc: string | null; party: string | null }>(
+          `SELECT d.id, d.date, d.total, a.name acc, p.name party FROM documents d
        LEFT JOIN accounts a ON a.id = d.account_id LEFT JOIN parties p ON p.id = d.party_id
-       WHERE d.business_id = ? AND d.kind = ? AND d.date >= ?`, [bid, meta.kind, since]);
-    const lines = all<{ document_id: string; name: string; qty: number; amount: number; unit: string | null }>(
-      `SELECT di.document_id, di.name, di.qty, di.amount, di.unit FROM doc_items di JOIN documents d ON d.id = di.document_id
-       WHERE d.business_id = ? AND d.kind = ? AND d.date >= ?`, [bid, meta.kind, since]);
+       WHERE d.business_id = ? AND d.kind = ? AND d.date >= ?`, [bid, meta.kind, since]));
+    const lines = (await all<{ document_id: string; name: string; qty: number; amount: number; unit: string | null }>(
+          `SELECT di.document_id, di.name, di.qty, di.amount, di.unit FROM doc_items di JOIN documents d ON d.id = di.document_id
+       WHERE d.business_id = ? AND d.kind = ? AND d.date >= ?`, [bid, meta.kind, since]));
     const byDoc = new Map<string, Tx["lines"]>();
     for (const l of lines) { const a = byDoc.get(l.document_id) || []; a.push({ name: l.name, qty: l.qty, amount: l.amount, unit: l.unit }); byDoc.set(l.document_id, a); }
     for (const d of docs) txs.push({ date: d.date, amount: d.total, account: d.acc, who: d.party || (type === "sales" ? "Cash Sale" : "Cash Purchase"), lines: byDoc.get(d.id) || [] });
   } else {
-    for (const e of all<{ date: string; amount: number; acc: string | null; category: string | null; lines: string | null }>(
-      `SELECT e.date, e.amount, a.name acc, e.category, e.lines FROM expenses e LEFT JOIN accounts a ON a.id = e.account_id
-       WHERE e.business_id = ? AND e.date >= ?`, [bid, since])) {
+    for (const e of (await all<{ date: string; amount: number; acc: string | null; category: string | null; lines: string | null }>(
+          `SELECT e.date, e.amount, a.name acc, e.category, e.lines FROM expenses e LEFT JOIN accounts a ON a.id = e.account_id
+       WHERE e.business_id = ? AND e.date >= ?`, [bid, since]))) {
       let ls: Tx["lines"] = [];
       try { ls = (JSON.parse(e.lines || "[]") as { name: string; qty: number; rate: number; amount?: number }[]).map((l) => ({ name: l.name, qty: Number(l.qty) || 0, amount: Number(l.amount ?? (l.qty * l.rate)) || 0, unit: null })); } catch { /* ignore */ }
       txs.push({ date: e.date, amount: e.amount, account: e.acc, who: e.category || "Uncategorised", lines: ls });
