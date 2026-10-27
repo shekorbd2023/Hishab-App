@@ -3,8 +3,11 @@
   "appName": "Hishab",
   "webDir": "www",
   "server": {
-    "url": "https://REPLACE-WITH-YOUR-RAILWAY-URL.up.railway.app",
+    "url": "https://hishab-six.vercel.app",
     "androidScheme": "https",
-    "cleartext": true
+    "cleartext": false,
+    "allowNavigation": [
+      "hishab-six.vercel.app"
+    ]
   }
 }

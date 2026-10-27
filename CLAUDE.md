@@ -42,10 +42,12 @@ sales/purchase, POS, accounts, expenses, reports). Bilingual EN/BN, BDT (`Tk.`).
 Owner | Admin | Partner | Staff. Permissions map module → actions in
 `business_members.permissions` (JSON). Owner/Admin see the audit log.
 
-## Shipping (ship-app-web-mobile-desktop skill)
-Web → Railway (Docker, volume at `/data`). Android → Capacitor wrapper (public repo,
-GitHub Actions APK). Windows → Electron + electron-builder (`windows-latest`).
-See `DEPLOY.md`.
+## Shipping (since v0.4.0 everything uses ONE online database)
+Web → Vercel project `hishab` (https://hishab-six.vercel.app), deploys on every push to `main`;
+functions in iad1 next to the Turso DB (US East) — keep them in the same region.
+Android → Capacitor wrapper loads the site (`capacitor-wrapper/capacitor.config.json`), APK via the
+"Build Android APK" workflow (release `apk-latest`). Windows → Electron window onto the site
+(`WEB_URL` in `electron/main.js`, offline screen on load failure); the bundled local server is no longer started.
 
 ## Security rules (v0.3.0)
 - Every write API checks `allowed(ctx, module, action)` (modules: parties, inventory, sales,

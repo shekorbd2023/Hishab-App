@@ -5,6 +5,9 @@ const http = require("http");
 const fs = require("fs");
 
 const PORT = 34117;
+// Since v0.4.0 the desktop app is a window onto the online Hishab, so phone, web and PC share one set of data.
+const WEB_URL = process.env.HISHAB_URL || "https://hishab-six.vercel.app";
+const WEB_HOST = new URL(WEB_URL).host;
 let serverProc;
 const logFile = path.join(app.getPath("userData"), "hishab.log");
 const debugSinks = ["G:\\bsuiness management oftwrae\\hishab-desktop.log"];
@@ -110,18 +113,38 @@ function setupAutoUpdate() {
   setInterval(check, 4 * 60 * 60 * 1000);
 }
 
+const OFFLINE_PAGE = "data:text/html;charset=utf-8," + encodeURIComponent(
+  "<body style='font-family:system-ui,sans-serif;display:grid;place-items:center;height:100vh;margin:0;background:#f6f8f7;color:#1b2b24'>" +
+  "<div style='text-align:center;max-width:420px;padding:24px'><div style='font-size:42px'>📶</div>" +
+  "<h2 style='margin:.4em 0'>ইন্টারনেট সংযোগ নেই</h2><p style='color:#5b6b64'>Hishab চালাতে ইন্টারনেট লাগে। সংযোগ ঠিক হলে আবার চেষ্টা করুন।<br>No internet connection — Hishab needs internet.</p>" +
+  "<button onclick=\"location.href='" + WEB_URL + "/dashboard'\" style='margin-top:12px;padding:10px 22px;border:0;border-radius:8px;background:#1f9d6f;color:#fff;font-size:15px;cursor:pointer'>আবার চেষ্টা করুন / Retry</button></div></body>");
+
 function createWindow() {
   const winIcon = resourcePath("standalone", "public", "icon.png");
   const win = new BrowserWindow({ width: 1280, height: 820, title: "Hishab " + app.getVersion(), icon: winIcon, webPreferences: { contextIsolation: true } });
   mainWin = win;
   win.on("page-title-updated", (e) => e.preventDefault());
-  waitForServer(win);
+  // Links to other sites (WhatsApp, Facebook, maps…) open in the normal browser, not inside Hishab.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    try { if (new URL(url).host !== WEB_HOST) { shell.openExternal(url); return { action: "deny" }; } } catch (e) {}
+    return { action: "allow" };
+  });
+  win.webContents.on("will-navigate", (e, url) => {
+    try { const u = new URL(url); if (u.protocol.startsWith("http") && u.host !== WEB_HOST) { e.preventDefault(); shell.openExternal(url); } } catch (er) {}
+  });
+  win.webContents.on("did-fail-load", (_e, code, desc, url, isMainFrame) => {
+    if (!isMainFrame || code === -3) return; // -3 = navigation aborted (normal)
+    log("load failed " + code + " " + desc + " " + url);
+    win.loadURL(OFFLINE_PAGE);
+  });
+  log("loading " + WEB_URL);
+  win.loadURL(WEB_URL + "/dashboard");
 }
 
 const lock = app.requestSingleInstanceLock();
 if (!lock) { app.quit(); }
 else {
-  app.whenReady().then(() => { try{ app.setAppUserModelId("app.hishab.desktop"); }catch(e){} log("app ready; packaged=" + app.isPackaged); startServer(); createWindow(); setupAutoUpdate();
+  app.whenReady().then(() => { try{ app.setAppUserModelId("app.hishab.desktop"); }catch(e){} log("app ready; packaged=" + app.isPackaged); createWindow(); setupAutoUpdate();
     app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); }); });
   app.on("second-instance", () => { if (mainWin) { if (mainWin.isMinimized()) mainWin.restore(); mainWin.focus(); } });
   app.on("window-all-closed", () => { if (serverProc) serverProc.kill(); if (process.platform !== "darwin") app.quit(); });
