@@ -3,6 +3,7 @@
 import { all, get } from "./db";
 import { partyBalances, accountBalances, itemStocks, accountLedger, partyLedger, itemActivity, docLabel } from "./domain";
 import { fmtDate, tk, qty as fq, TODAY } from "./format";
+import { fifoSales, itemProfits } from "./fifo";
 
 /* ============================== Types ============================== */
 export type ColKind = "text" | "money" | "qty" | "date" | "status" | "signed";
@@ -66,6 +67,7 @@ export const REPORTS: ReportMeta[] = [
   { type: "day-book", title: "Day Book", desc: "Every transaction of the day with money in and out", group: "transactions", icon: "calendar" },
   { type: "all-transactions", title: "All Transactions", desc: "Sales, purchases, payments, income and expenses together", group: "transactions", icon: "statement" },
   { type: "profit-and-loss", title: "Profit And Loss", desc: "Net sales, cost of goods, expenses and net profit", group: "transactions", icon: "chart" },
+  { type: "item-profit", title: "Item Wise Profit (FIFO)", desc: "Profit of every product: sales, FIFO cost, profit and margin", group: "transactions", icon: "chart" },
   { type: "party-statement", title: "Party Statement", desc: "Debit, credit and running balance of one party", group: "parties", icon: "user" },
   { type: "all-party", title: "All Party Report", desc: "Receivable and payable balance of every party", group: "parties", icon: "users" },
   { type: "item-detail", title: "Item Details Report", desc: "Stock movement of one item with running quantity", group: "inventory", icon: "box" },
@@ -158,6 +160,7 @@ export async function buildReport(bid: string, type: string, sp: SP): Promise<Re
     case "day-book": return dayBook(bid, sp);
     case "all-transactions": return allTransactions(bid, sp);
     case "profit-and-loss": return profitLoss(bid, sp);
+    case "item-profit": return itemProfitReport(bid, sp);
     case "party-statement": return partyStatement(bid, sp);
     case "all-party": return allParty(bid, sp);
     case "item-detail": return itemDetail(bid, sp);
@@ -344,7 +347,8 @@ async function stockMoves(bid: string, from: string, to: string) {
 /* ---------- Profit & Loss ---------- */
 async function profitLoss(bid: string, sp: SP): Promise<Report> {
   const date = resolveRange(sp, "month");
-  const stockBased = sp.stock === "1";
+  const method = sp.stock === "1" ? "stock" : ["simple", "fifo", "stock"].includes(sp.cogs || "") ? sp.cogs! : "fifo";
+  const stockBased = method === "stock";
   const lineSum = async (kind: string) => (await get<{ s: number }>(
       `SELECT COALESCE(SUM(di.amount),0) s FROM doc_items di JOIN documents d ON d.id=di.document_id
      WHERE d.business_id=? AND d.kind=? AND d.date>=? AND d.date<=?`, [bid, kind, date.from, date.to]))?.s ?? 0;
@@ -353,7 +357,18 @@ async function profitLoss(bid: string, sp: SP): Promise<Report> {
 
   let cogs = 0;
   const cogsChildren: RRow[] = [];
-  if (!stockBased) {
+  if (method === "fifo") {
+    const { lines } = await fifoSales(bid);
+    let sold = 0, ret = 0, short = 0;
+    for (const l of lines) {
+      if (l.date < date.from || l.date > date.to) continue;
+      if (l.isReturn) ret -= l.cost; else { sold += l.cost; short += l.shortQty; }
+    }
+    cogs = sold - ret;
+    cogsChildren.push({ id: "c1", c: { p: "Cost of items sold (FIFO: oldest stock first)", a: r2(sold) } });
+    if (ret) cogsChildren.push({ id: "c2", c: { p: "Less: cost of items returned", a: -r2(ret) } });
+    if (short > 0.0001) cogsChildren.push({ id: "c3", c: { p: `Note: ${fq(short)} units were sold without stock; costed at last purchase price`, a: null } });
+  } else if (!stockBased) {
     const costOf = async (kind: string) => (await get<{ s: number }>(
           `SELECT COALESCE(SUM(di.qty*i.purchase_price),0) s FROM doc_items di JOIN documents d ON d.id=di.document_id JOIN items i ON i.id=di.item_id
        WHERE d.business_id=? AND d.kind=? AND d.date>=? AND d.date<=?`, [bid, kind, date.from, date.to]))?.s ?? 0;
@@ -399,7 +414,7 @@ async function profitLoss(bid: string, sp: SP): Promise<Report> {
 
   return {
     type: "profit-and-loss", title: "Profit And Loss", fileTitle: "Profit And Loss Report", date, compact: true,
-    filters: [{ kind: "switch", param: "stock", value: stockBased, label: "Show Stock-Based Profit" }],
+    filters: [{ kind: "seg", param: "cogs", value: method, options: [{ v: "fifo", l: "FIFO Cost" }, { v: "simple", l: "Purchase Price" }, { v: "stock", l: "Stock-Based" }] }],
     kpis: [
       { v: tk(netSales), l: "Net Sales" }, { v: tk(gross), l: "Gross Profit", tone: gross >= 0 ? "pos" : "neg" },
       { v: tk(expenses), l: "Net Expenses", tone: "neg" }, { v: tk(net), l: "Net Profit", tone: net >= 0 ? "pos" : "neg" },
@@ -416,9 +431,65 @@ async function profitLoss(bid: string, sp: SP): Promise<Report> {
       { id: "ex", c: { p: "Net Expenses (−)", a: r2(expenses) }, children: expCats.length ? expCats.map((c, i) => ({ id: "e" + i, c: { p: c.category || "Uncategorized", a: r2(c.s) } })) : [{ id: "e-", c: { p: "No expenses in this period", a: 0 } }] },
       { id: "np", c: { p: "Net Profit", a: r2(net) }, variant: "green" },
     ],
-    note: stockBased
+    note: method === "fifo"
+      ? "FIFO: every sale is costed at what that stock actually cost, oldest purchase first, so changing purchase prices are handled correctly. Purchase cost includes the bill's discount and additional charges (e.g. transport). Net Sales = item amounts on sales invoices minus sales returns; bill discounts, charges and round-off are under Other Net Income."
+      : stockBased
       ? "Stock-based: Cost of Goods Sold = opening stock value + net purchases − closing stock value (all at current purchase price)."
       : "Net Sales = item amounts on sales invoices (after item discounts) minus sales returns. Bill-level discounts, additional charges and round-off are shown under Other Net Income, so Net Profit reconciles with invoice totals. Cost of Goods Sold = quantity sold × item purchase price.",
+  };
+}
+
+/* ---------- Item Wise Profit (FIFO) ---------- */
+async function itemProfitReport(bid: string, sp: SP): Promise<Report> {
+  const date = resolveRange(sp, "month");
+  const items = await itemsOf(bid);
+  const byId = Object.fromEntries(items.map((i) => [i.id, i]));
+  const prof = await itemProfits(bid, date.from, date.to);
+  const cat = sp.cat || "all";
+  const showReturns = sp.lines === "1";
+  let list = Object.values(prof).filter((p) => byId[p.itemId]);
+  if (cat !== "all") list = list.filter((p) => (byId[p.itemId].category || "General") === cat);
+  const pct = (profit: number, rev: number) => (Math.abs(rev) > 0.004 ? `${(Math.round((profit / rev) * 1000) / 10).toFixed(1)}%` : "--");
+  const T = list.reduce((a, p) => ({ rev: a.rev + p.revenue, cost: a.cost + p.cost, qty: a.qty + p.qty, short: a.short + p.shortQty }), { rev: 0, cost: 0, qty: 0, short: 0 });
+  const best = [...list].sort((a, b) => b.profit - a.profit)[0];
+  const rows: RRow[] = list.map((p) => {
+    const it = byId[p.itemId];
+    const u = it.unit ? " " + it.unit : "";
+    const children: RRow[] = [...p.lines].sort((a, b) => a.date.localeCompare(b.date)).map((l) => ({
+      id: l.lineId, href: `/doc/${l.docId}`, variant: "item" as const,
+      c: { name: `${fmtDate(l.date)} · ${l.isReturn ? "Sales Return" : "Sales"} #${l.docNumber} · ${l.party || "Cash Sale"}`, qty: l.qty, avg: l.qty ? r2(l.revenue / l.qty) : null, rev: l.revenue, ucost: l.qty ? r2(l.cost / l.qty) : null, cost: l.cost, profit: r2(l.revenue - l.cost), margin: pct(l.revenue - l.cost, l.revenue) },
+      suffix: { qty: u }, tone: { profit: l.revenue - l.cost >= 0 ? "pos" : "neg" },
+      sub: l.shortQty > 0.0001 ? { name: `${fq(l.shortQty)}${u} sold without stock — cost estimated` } : undefined,
+    }));
+    return {
+      id: p.itemId, href: showReturns ? undefined : `/inventory/${p.itemId}`,
+      c: { name: it.name, qty: r2(p.qty), avg: p.qty ? r2(p.revenue / p.qty) : null, rev: p.revenue, ucost: p.qty ? r2(p.cost / p.qty) : null, cost: p.cost, profit: p.profit, margin: pct(p.profit, p.revenue) },
+      suffix: { qty: u }, sub: { name: it.category || "General" }, tone: { profit: p.profit >= 0 ? "pos" : "neg" },
+      children: showReturns ? children : undefined,
+      sort: { n: it.name, a: p.profit, q: p.qty },
+    };
+  });
+  return {
+    type: "item-profit", title: "Item Wise Profit (FIFO)", fileTitle: "Item Wise Profit Report", date,
+    filters: [catFilter(items, cat), { kind: "check", param: "lines", value: showReturns, label: "Show Every Sale" }],
+    kpis: [
+      { v: tk(r2(T.rev)), l: "Net Sales (items)" },
+      { v: tk(r2(T.cost)), l: "Cost of Goods (FIFO)", tone: "neg" },
+      { v: tk(r2(T.rev - T.cost)), l: "Gross Profit", tone: T.rev - T.cost >= 0 ? "pos" : "neg" },
+      { v: pct(T.rev - T.cost, T.rev), l: "Profit Margin" },
+      ...(best ? [{ v: byId[best.itemId].name, l: "Most Profitable Item" }] : []),
+    ],
+    cols: [
+      { key: "name", label: "Item Name", minWidth: 220 }, { key: "qty", label: "Qty Sold", kind: "qty", total: true },
+      { key: "avg", label: "Avg Sale Price", kind: "money" }, { key: "rev", label: "Sales Amount", kind: "money", total: true },
+      { key: "ucost", label: "Avg Cost (FIFO)", kind: "money" }, { key: "cost", label: "Total Cost", kind: "money", total: true },
+      { key: "profit", label: "Profit", kind: "money", total: true }, { key: "margin", label: "Margin" },
+    ],
+    rows, totals: true, searchable: "Search items…",
+    sortOptions: [{ v: "amount_desc", l: "Profit High → Low" }, { v: "amount_asc", l: "Profit Low → High" }, { v: "qty_desc", l: "Quantity High → Low" }, { v: "name_az", l: "Name A → Z" }],
+    defaultSort: "amount_desc",
+    empty: { title: "No Sales Found", text: "No item was sold in this period.", icon: "chart" },
+    note: `FIFO (first in, first out): each sale uses the oldest stock first, at the price that stock was actually bought for — so when purchase prices change, profit stays correct. Purchase cost includes the bill discount and additional charges (transport etc.). Sales Amount is after item and bill discounts, without tax. Delivery charges you collect are not item sales; they appear in Profit And Loss.${T.short > 0.0001 ? ` ${fq(T.short)} units were sold when stock was zero — their cost is estimated at the last purchase price; add the missing purchase bills to make it exact.` : ""}`,
   };
 }
 

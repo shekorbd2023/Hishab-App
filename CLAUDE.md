@@ -32,6 +32,8 @@ sales/purchase, POS, accounts, expenses, reports). Bilingual EN/BN, BDT (`Tk.`).
     opening + sales − salesReturn − paymentIn − purchase + paymentOut + purchaseReturn.
   - Account balance = opening + paymentIn − paymentOut + income − expense + transferIn − transferOut.
   - Item stock = opening + purchases + salesReturns − sales − purchaseReturns.
+  - Cost of goods = FIFO (`src/lib/fifo.ts`, replays all stock moves; landed purchase cost incl. bill discount/charges).
+    Used by the P&L (default method) and the "Item Wise Profit (FIFO)" report.
 - All documents (sales invoice, purchase bill, quotation, sales/purchase return) share
   the `documents` + `doc_items` tables, keyed by `kind`.
 - Doc numbers come from the `counters` table (per business, per kind).
