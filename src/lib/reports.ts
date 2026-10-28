@@ -3,7 +3,7 @@
 import { all, get } from "./db";
 import { partyBalances, accountBalances, itemStocks, accountLedger, partyLedger, itemActivity, docLabel } from "./domain";
 import { fmtDate, tk, qty as fq, TODAY } from "./format";
-import { fifoSales, itemProfits } from "./fifo";
+import { fifoSales, itemProfits, docProfits } from "./fifo";
 
 /* ============================== Types ============================== */
 export type ColKind = "text" | "money" | "qty" | "date" | "status" | "signed";
@@ -68,6 +68,7 @@ export const REPORTS: ReportMeta[] = [
   { type: "all-transactions", title: "All Transactions", desc: "Sales, purchases, payments, income and expenses together", group: "transactions", icon: "statement" },
   { type: "profit-and-loss", title: "Profit And Loss", desc: "Net sales, cost of goods, expenses and net profit", group: "transactions", icon: "chart" },
   { type: "item-profit", title: "Item Wise Profit (FIFO)", desc: "Profit of every product: sales, FIFO cost, profit and margin", group: "transactions", icon: "chart" },
+  { type: "invoice-profit", title: "Invoice Wise Profit (FIFO)", desc: "Profit of every sales invoice, product by product", group: "transactions", icon: "receipt" },
   { type: "party-statement", title: "Party Statement", desc: "Debit, credit and running balance of one party", group: "parties", icon: "user" },
   { type: "all-party", title: "All Party Report", desc: "Receivable and payable balance of every party", group: "parties", icon: "users" },
   { type: "item-detail", title: "Item Details Report", desc: "Stock movement of one item with running quantity", group: "inventory", icon: "box" },
@@ -161,6 +162,7 @@ export async function buildReport(bid: string, type: string, sp: SP): Promise<Re
     case "all-transactions": return allTransactions(bid, sp);
     case "profit-and-loss": return profitLoss(bid, sp);
     case "item-profit": return itemProfitReport(bid, sp);
+    case "invoice-profit": return invoiceProfitReport(bid, sp);
     case "party-statement": return partyStatement(bid, sp);
     case "all-party": return allParty(bid, sp);
     case "item-detail": return itemDetail(bid, sp);
@@ -490,6 +492,53 @@ async function itemProfitReport(bid: string, sp: SP): Promise<Report> {
     defaultSort: "amount_desc",
     empty: { title: "No Sales Found", text: "No item was sold in this period.", icon: "chart" },
     note: `FIFO (first in, first out): each sale uses the oldest stock first, at the price that stock was actually bought for — so when purchase prices change, profit stays correct. Purchase cost includes the bill discount and additional charges (transport etc.). Sales Amount is after item and bill discounts, without tax. Delivery charges you collect are not item sales; they appear in Profit And Loss.${T.short > 0.0001 ? ` ${fq(T.short)} units were sold when stock was zero — their cost is estimated at the last purchase price; add the missing purchase bills to make it exact.` : ""}`,
+  };
+}
+
+/* ---------- Invoice Wise Profit (FIFO) ---------- */
+async function invoiceProfitReport(bid: string, sp: SP): Promise<Report> {
+  const date = resolveRange(sp, "month");
+  const opts = await partyOptions(bid);
+  const pid = sp.party && opts.some((o) => o.id === sp.party) ? sp.party : undefined;
+  const docs = await docProfits(bid, { from: date.from, to: date.to, partyId: pid });
+  const pct = (profit: number, rev: number) => (Math.abs(rev) > 0.004 ? `${(Math.round((profit / rev) * 1000) / 10).toFixed(1)}%` : "--");
+  const T = docs.reduce((a, d) => ({ rev: a.rev + d.revenue - d.unlinked, cost: a.cost + d.cost, un: a.un + d.unlinked }), { rev: 0, cost: 0, un: 0 });
+  const rows: RRow[] = docs.map((d) => {
+    const ret = d.kind === "sales_return";
+    const rev = r2(d.revenue - d.unlinked);
+    return {
+      id: d.docId, href: `/doc/${d.docId}`,
+      c: { date: d.date, name: `${ret ? "Sales Return" : "Sales"} #${d.number} · ${d.party || "Cash Sale"}`, qty: null, rev, cost: d.cost, profit: d.profit, margin: pct(d.profit, rev) },
+      tone: { profit: d.profit >= 0 ? "pos" : "neg" },
+      sub: d.unlinked ? { name: `${tk(Math.abs(d.unlinked))} of lines not linked to an item (no cost)` } : undefined,
+      children: d.lines.map((l) => ({
+        id: l.lineId, variant: "item" as const,
+        c: { date: "", name: l.name, qty: l.qty, rev: l.cost === null ? null : l.revenue, cost: l.cost, profit: l.profit, margin: l.profit === null ? "not linked" : pct(l.profit, l.revenue) },
+        suffix: { qty: l.unit ? " " + l.unit : "" }, tone: l.profit === null ? undefined : { profit: l.profit >= 0 ? "pos" : "neg" },
+        sub: l.cost === null ? { name: `Sold for ${tk(l.revenue)} — link this line to an item to see its cost` } : l.shortQty > 0.0001 ? { name: `${fq(l.shortQty)} sold without stock — cost estimated` } : undefined,
+      })),
+      sort: { d: d.date + String(d.number).padStart(8, "0"), a: d.profit, n: d.party || "" },
+    };
+  });
+  return {
+    type: "invoice-profit", title: "Invoice Wise Profit (FIFO)", fileTitle: "Invoice Wise Profit Report", date,
+    filters: [{ kind: "picker", param: "party", value: pid || null, placeholder: "All Parties", options: opts, clearable: true, width: 240 }],
+    kpis: [
+      { v: `${docs.length} Invoices`, l: "Total Invoices" },
+      { v: tk(r2(T.rev)), l: "Sales (linked items)" },
+      { v: tk(r2(T.cost)), l: "Cost of Goods (FIFO)", tone: "neg" },
+      { v: tk(r2(T.rev - T.cost)), l: "Gross Profit", tone: T.rev - T.cost >= 0 ? "pos" : "neg" },
+      { v: pct(T.rev - T.cost, T.rev), l: "Profit Margin" },
+    ],
+    cols: [
+      { key: "date", label: "Date", kind: "date" }, { key: "name", label: "Invoice / Product", minWidth: 240 }, { key: "qty", label: "Qty", kind: "qty" },
+      { key: "rev", label: "Sales Amount", kind: "money", total: true }, { key: "cost", label: "Cost (FIFO)", kind: "money", total: true },
+      { key: "profit", label: "Gross Profit", kind: "money", total: true }, { key: "margin", label: "Margin" },
+    ],
+    rows, totals: true, searchable: "Search invoice or party…",
+    sortOptions: [...DOC_SORT.slice(0, 2), { v: "amount_desc", l: "Profit High → Low" }, { v: "amount_asc", l: "Profit Low → High" }], defaultSort: "latest",
+    empty: { title: "No Sales Found", text: "No sales invoice in this period." },
+    note: `Click an invoice to see the profit on each product in it. Cost uses FIFO — the price you actually paid for that stock, oldest first. Sales Amount is after item and bill discounts, without tax; delivery charges are not included.${T.un ? ` ${tk(r2(Math.abs(T.un)))} of sales were lines not linked to an inventory item, so they have no cost and are left out of profit.` : ""}`,
   };
 }
 

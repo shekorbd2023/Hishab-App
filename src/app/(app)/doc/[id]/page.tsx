@@ -5,6 +5,9 @@ import InvoiceDocument, { ThermalInvoice, DOC_NAME } from "@/components/InvoiceD
 import { PrintStage } from "@/components/PrintBar";
 import { loadInvoice, paymentPickers } from "../load";
 import DocBar from "./DocBar";
+import Link from "next/link";
+import { docProfits } from "@/lib/fifo";
+import { tk, qty as fq } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
@@ -40,6 +43,10 @@ export default async function DocPreview({ params, searchParams }: {
     (data.charges.length ? "\n" + data.charges.map((c) => `${c.title}: Tk. ${c.amount.toLocaleString("en-US")}`).join("\n") : "") +
     `\nTotal: Tk. ${data.total.toLocaleString("en-US")}` + (due > 0 ? `\nDue: Tk. ${due.toLocaleString("en-US")}` : "") + `\nThank you!`;
 
+  const showProfit = (data.kind === "sales_invoice" || data.kind === "sales_return") && ["Owner", "Admin", "Partner"].includes(ctx.role) && !settings.privacy_mode;
+  const profit = showProfit ? (await docProfits(bid, { docId: id }))[0] : undefined;
+  const pct = (p: number, r: number) => (Math.abs(r) > 0.004 ? `${((p / r) * 100).toFixed(1)}%` : "--");
+
   return (
     <div>
       <DocBar
@@ -50,6 +57,36 @@ export default async function DocPreview({ params, searchParams }: {
       <PrintStage pageCss={pageCss}>
         {thermal ? <ThermalInvoice data={data} lh={letterhead} settings={settings} /> : <InvoiceDocument data={data} lh={letterhead} settings={settings} />}
       </PrintStage>
+      {profit && (
+        <div className="card no-print" style={{ maxWidth: 820, margin: "1rem auto", padding: "1rem" }}>
+          <div className="row" style={{ justifyContent: "space-between", marginBottom: ".6rem", flexWrap: "wrap", gap: ".5rem" }}>
+            <div style={{ fontWeight: 700 }}>Profit on this {data.kind === "sales_return" ? "return" : "invoice"} (FIFO) · শুধু আপনি দেখছেন, প্রিন্টে আসবে না</div>
+            <Link href="/reports/invoice-profit" className="btn">All invoices →</Link>
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table className="tbl" style={{ width: "100%", fontSize: ".9rem" }}>
+              <thead><tr><th style={{ textAlign: "left" }}>Product</th><th style={{ textAlign: "right" }}>Qty</th><th style={{ textAlign: "right" }}>Sold for</th><th style={{ textAlign: "right" }}>Cost (FIFO)</th><th style={{ textAlign: "right" }}>Gross Profit</th><th style={{ textAlign: "right" }}>Margin</th></tr></thead>
+              <tbody>
+                {profit.lines.map((l) => (
+                  <tr key={l.lineId}>
+                    <td>{l.name}{l.cost === null && <div className="sub" style={{ fontSize: ".75rem" }}>Not linked to an inventory item — no cost</div>}{l.shortQty > 0.0001 && <div className="sub" style={{ fontSize: ".75rem" }}>{fq(l.shortQty)} sold without stock — cost estimated</div>}</td>
+                    <td style={{ textAlign: "right" }}>{fq(l.qty)}{l.unit ? " " + l.unit : ""}</td>
+                    <td style={{ textAlign: "right" }}>{tk(l.revenue)}</td>
+                    <td style={{ textAlign: "right" }}>{l.cost === null ? "--" : tk(l.cost)}</td>
+                    <td style={{ textAlign: "right", fontWeight: 600 }} className={l.profit === null ? "" : l.profit >= 0 ? "pos" : "neg"}>{l.profit === null ? "--" : tk(l.profit)}</td>
+                    <td style={{ textAlign: "right" }}>{l.profit === null ? "--" : pct(l.profit, l.revenue)}</td>
+                  </tr>
+                ))}
+                <tr style={{ fontWeight: 700, borderTop: "2px solid var(--border)" }}>
+                  <td>Total</td><td /><td style={{ textAlign: "right" }}>{tk(profit.revenue - profit.unlinked)}</td><td style={{ textAlign: "right" }}>{tk(profit.cost)}</td>
+                  <td style={{ textAlign: "right" }} className={profit.profit >= 0 ? "pos" : "neg"}>{tk(profit.profit)}</td><td style={{ textAlign: "right" }}>{pct(profit.profit, profit.revenue - profit.unlinked)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div className="sub" style={{ fontSize: ".78rem", marginTop: ".5rem" }}>Sold for = after item and bill discounts, without tax. Delivery charge is not product profit.</div>
+        </div>
+      )}
     </div>
   );
 }

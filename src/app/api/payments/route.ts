@@ -1,4 +1,5 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
+import { notifyPayment } from "@/lib/notify";
 import { requireCtx, allowed, belongs } from "@/lib/auth";
 import { get, run } from "@/lib/db";
 import { recordPayment, refreshDocStatus, round2 } from "@/lib/actions";
@@ -34,6 +35,7 @@ export async function POST(req: Request) {
           images: Array.isArray(body.images) ? body.images : undefined, createdBy: ctx.user.name,
         }));
     (await logAudit({ businessId: bid, userId: ctx.user.id, userName: ctx.user.name, action: "create", entity: "payment", entityId: res.id, summary: `${kind === "out" ? "Payment Out" : "Payment In"} #${res.number} ${money(amount)}`, after: body }));
+    if (kind === "in") after(() => notifyPayment(bid, res.id));
     return NextResponse.json({ ok: true, ...res });
   }
 

@@ -1,4 +1,5 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
+import { notifyInvoice } from "@/lib/notify";
 import { requireCtx, can, getMember, belongs } from "@/lib/auth";
 import { get, run, tx } from "@/lib/db";
 import { createDocument, updateDocument, cloneDocument, type LineInput, type Charge, type DocKind } from "@/lib/actions";
@@ -64,6 +65,7 @@ export async function POST(req: Request) {
     if (!okItems) return NextResponse.json({ error: "An item in this bill was not found." }, { status: 404 });
     const res = op === "create" ? (await createDocument(input)) : (await updateDocument(body.id, input));
     (await logAudit({ businessId: bid, userId: ctx.user.id, userName: ctx.user.name, action: op, entity: kind, entityId: res.id, summary: `${op === "create" ? "Created" : "Edited"} ${kind} #${res.number} — ${res.total}` }));
+    if (op === "create" && kind === "sales_invoice") after(() => notifyInvoice(bid, res.id));
     return NextResponse.json({ ok: true, ...res });
   }
 

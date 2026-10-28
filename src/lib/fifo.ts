@@ -166,3 +166,49 @@ export async function itemProfits(bid: string, from: string, to: string): Promis
   for (const x of Object.values(res)) { x.revenue = r2(x.revenue); x.cost = r2(x.cost); x.profit = r2(x.revenue - x.cost); }
   return res;
 }
+
+export type DocProfitLine = { lineId: string; name: string; itemId: string | null; qty: number; unit: string | null; revenue: number; cost: number | null; profit: number | null; shortQty: number };
+export type DocProfit = { docId: string; number: number; kind: string; date: string; party: string | null; revenue: number; cost: number; profit: number; unlinked: number; lines: DocProfitLine[] };
+
+/**
+ * FIFO profit of each sales invoice / sales return dated within [from, to] (or one document),
+ * product by product. Lines without a linked item have no cost (counted in `unlinked`).
+ */
+export async function docProfits(bid: string, opts: { from?: string; to?: string; docId?: string; partyId?: string } = {}): Promise<DocProfit[]> {
+  const { lines: fifo } = await fifoSales(bid);
+  const byLine = new Map(fifo.map((l) => [l.lineId, l]));
+  const where = ["d.business_id=?", "d.kind IN ('sales_invoice','sales_return')"];
+  const params: unknown[] = [bid];
+  if (opts.docId) { where.push("d.id=?"); params.push(opts.docId); }
+  if (opts.from) { where.push("d.date>=?"); params.push(opts.from); }
+  if (opts.to) { where.push("d.date<=?"); params.push(opts.to); }
+  if (opts.partyId) { where.push("d.party_id=?"); params.push(opts.partyId); }
+  const rows = await all<{ doc_id: string; number: number; kind: string; date: string; created_at: string; pname: string | null; line_id: string | null; item_id: string | null; name: string | null; qty: number | null; unit: string | null; amount: number | null; tax_rate: number | null; doc_discount: number; line_sum: number }>(
+    `SELECT d.id doc_id, d.number, d.kind, d.date, d.created_at, p.name pname, di.id line_id, di.item_id, di.name, di.qty, di.unit, di.amount, di.tax_rate, d.doc_discount,
+            (SELECT COALESCE(SUM(amount),0) FROM doc_items WHERE document_id=d.id) line_sum
+       FROM documents d LEFT JOIN parties p ON p.id=d.party_id LEFT JOIN doc_items di ON di.document_id=d.id
+      WHERE ${where.join(" AND ")} ORDER BY d.date DESC, d.created_at DESC, di.rowid`, params);
+  const out = new Map<string, DocProfit>();
+  for (const r of rows) {
+    let d = out.get(r.doc_id);
+    if (!d) { d = { docId: r.doc_id, number: r.number, kind: r.kind, date: r.date, party: r.pname, revenue: 0, cost: 0, profit: 0, unlinked: 0, lines: [] }; out.set(r.doc_id, d); }
+    if (!r.line_id) continue;
+    const sign = r.kind === "sales_return" ? -1 : 1;
+    const f = byLine.get(r.line_id);
+    let line: DocProfitLine;
+    if (f) {
+      line = { lineId: r.line_id, name: r.name || "", itemId: r.item_id, qty: f.qty, unit: r.unit, revenue: f.revenue, cost: f.cost, profit: r2(f.revenue - f.cost), shortQty: f.shortQty };
+    } else {
+      // unlinked line (no item): revenue only, same discount/tax treatment as FIFO lines
+      const share = r.line_sum ? (r.amount || 0) / r.line_sum : 0;
+      const rev = Math.max(0, (r.amount || 0) / (1 + (r.tax_rate || 0) / 100) - share * (r.doc_discount || 0));
+      line = { lineId: r.line_id, name: r.name || "", itemId: r.item_id, qty: sign * (r.qty || 0), unit: r.unit, revenue: r2(sign * rev), cost: null, profit: null, shortQty: 0 };
+      d.unlinked += line.revenue;
+    }
+    d.lines.push(line);
+    d.revenue += line.revenue;
+    if (line.cost !== null) d.cost += line.cost;
+  }
+  for (const d of out.values()) { d.revenue = r2(d.revenue); d.cost = r2(d.cost); d.unlinked = r2(d.unlinked); d.profit = r2(d.revenue - d.unlinked - d.cost); }
+  return [...out.values()];
+}

@@ -47,6 +47,22 @@ CREATE TABLE IF NOT EXISTS integration_item_map (
   PRIMARY KEY (business_id, source, external_key)
 );
 
+CREATE TABLE IF NOT EXISTS notify_config (
+  business_id TEXT PRIMARY KEY REFERENCES businesses(id) ON DELETE CASCADE,
+  json TEXT NOT NULL                    -- NotifyConfig incl. email/SMS credentials (never sent to the browser)
+);
+
+CREATE TABLE IF NOT EXISTS notify_log (
+  id TEXT PRIMARY KEY,
+  business_id TEXT NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  channel TEXT NOT NULL,                -- email | sms
+  recipient TEXT NOT NULL,
+  subject TEXT,
+  status TEXT NOT NULL,                 -- sent | failed
+  error TEXT,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   email TEXT UNIQUE NOT NULL,

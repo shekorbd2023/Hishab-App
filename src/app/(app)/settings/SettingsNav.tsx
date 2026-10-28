@@ -7,6 +7,7 @@ const TOP = [
   { href: "/settings/general", label: "General", icon: "settings" },
   { href: "/settings/account", label: "My Account", icon: "user" },
   { href: "/settings/business-profile", label: "Business Profile", icon: "image" },
+  { href: "/settings/notifications", label: "Email & SMS", icon: "bell" },
   { href: "/settings/integrations", label: "Integrations", icon: "sparkle" },
 ];
 const FEATURES = [
