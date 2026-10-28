@@ -9,6 +9,44 @@ CREATE TABLE IF NOT EXISTS restore_snapshots (
   json TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS api_keys (
+  id TEXT PRIMARY KEY,
+  business_id TEXT NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  prefix TEXT NOT NULL,                 -- first characters, shown so the owner can tell keys apart
+  key_hash TEXT NOT NULL UNIQUE,        -- sha256 of the full key; the key itself is shown once
+  created_by TEXT,
+  created_at TEXT NOT NULL,
+  last_used_at TEXT
+);
+
+-- Website (or other shop) orders pushed in through the integration API
+CREATE TABLE IF NOT EXISTS integration_orders (
+  id TEXT PRIMARY KEY,
+  business_id TEXT NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  source TEXT NOT NULL,                 -- e.g. "website"
+  external_id TEXT NOT NULL,
+  order_number TEXT,
+  document_id TEXT,                     -- the sales invoice made from it (NULL when cancelled)
+  status TEXT NOT NULL,                 -- synced | cancelled | error
+  unmatched TEXT,                       -- JSON [{key, name}] of products not linked to an item
+  payload TEXT NOT NULL,                -- last body received, so mapping changes can re-sync
+  error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (business_id, source, external_id)
+);
+
+-- Which Hishab item a website product/variant is; Hishab qty = website qty × factor
+CREATE TABLE IF NOT EXISTS integration_item_map (
+  business_id TEXT NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  source TEXT NOT NULL,
+  external_key TEXT NOT NULL,
+  item_id TEXT NOT NULL,
+  factor REAL NOT NULL DEFAULT 1,
+  PRIMARY KEY (business_id, source, external_key)
+);
+
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   email TEXT UNIQUE NOT NULL,
