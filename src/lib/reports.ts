@@ -458,7 +458,7 @@ async function itemProfitReport(bid: string, sp: SP): Promise<Report> {
     const it = byId[p.itemId];
     const u = it.unit ? " " + it.unit : "";
     const children: RRow[] = [...p.lines].sort((a, b) => a.date.localeCompare(b.date)).map((l) => ({
-      id: l.lineId, href: `/doc/${l.docId}`, variant: "item" as const,
+      id: l.lineId, href: `/doc/${l.docId}`,
       c: { name: `${fmtDate(l.date)} · ${l.isReturn ? "Sales Return" : "Sales"} #${l.docNumber} · ${l.party || "Cash Sale"}`, qty: l.qty, avg: l.qty ? r2(l.revenue / l.qty) : null, rev: l.revenue, ucost: l.qty ? r2(l.cost / l.qty) : null, cost: l.cost, profit: r2(l.revenue - l.cost), margin: pct(l.revenue - l.cost, l.revenue) },
       suffix: { qty: u }, tone: { profit: l.revenue - l.cost >= 0 ? "pos" : "neg" },
       sub: l.shortQty > 0.0001 ? { name: `${fq(l.shortQty)}${u} sold without stock — cost estimated` } : undefined,
@@ -512,7 +512,7 @@ async function invoiceProfitReport(bid: string, sp: SP): Promise<Report> {
       tone: { profit: d.profit >= 0 ? "pos" : "neg" },
       sub: d.unlinked ? { name: `${tk(Math.abs(d.unlinked))} of lines not linked to an item (no cost)` } : undefined,
       children: d.lines.map((l) => ({
-        id: l.lineId, variant: "item" as const,
+        id: l.lineId,
         c: { date: "", name: l.name, qty: l.qty, rev: l.cost === null ? null : l.revenue, cost: l.cost, profit: l.profit, margin: l.profit === null ? "not linked" : pct(l.profit, l.revenue) },
         suffix: { qty: l.unit ? " " + l.unit : "" }, tone: l.profit === null ? undefined : { profit: l.profit >= 0 ? "pos" : "neg" },
         sub: l.cost === null ? { name: `Sold for ${tk(l.revenue)} — link this line to an item to see its cost` } : l.shortQty > 0.0001 ? { name: `${fq(l.shortQty)} sold without stock — cost estimated` } : undefined,
