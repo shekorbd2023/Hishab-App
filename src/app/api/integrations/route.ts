@@ -33,6 +33,11 @@ export async function POST(req: Request) {
   if (b.op === "map_item") {
     const key = String(b.key || "").slice(0, 150);
     if (!key) return NextResponse.json({ error: "Missing product" }, { status: 400 });
+    if (!b.itemId && b.itemName) {
+      const it = await get<{ id: string }>("SELECT id FROM items WHERE business_id=? AND name=?", [bid, String(b.itemName)]);
+      if (!it) return NextResponse.json({ error: `Item "${String(b.itemName).slice(0, 60)}" not found` }, { status: 400 });
+      b.itemId = it.id;
+    }
     if (!b.itemId) {
       await run("DELETE FROM integration_item_map WHERE business_id=? AND source='website' AND external_key=?", [bid, key]);
       return NextResponse.json({ ok: true, resynced: 0 });
