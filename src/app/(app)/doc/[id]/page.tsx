@@ -69,7 +69,21 @@ export default async function DocPreview({ params, searchParams }: {
               <tbody>
                 {profit.lines.map((l) => (
                   <tr key={l.lineId}>
-                    <td>{l.name}{l.cost === null && <div className="sub" style={{ fontSize: ".75rem" }}>Not linked to an inventory item — no cost</div>}{l.shortQty > 0.0001 && <div className="sub" style={{ fontSize: ".75rem" }}>{fq(l.shortQty)} sold without stock — cost estimated</div>}</td>
+                    <td>{l.name}{l.cost === null && <div className="sub" style={{ fontSize: ".75rem" }}>Not linked to an inventory item — no cost</div>}{l.cost !== null && l.sources.length > 0 && (
+                      <div className="sub" style={{ fontSize: ".75rem", marginTop: 2 }}>
+                        {l.sources.map((src, i) => (
+                          <div key={i}>
+                            Cost from: {fq(src.qty)}{l.unit ? " " + l.unit : ""} × {tk(src.unitCost)} — {" "}
+                            {src.kind === "opening" && <>Opening stock (item&apos;s Purchase Price) · ভুল হলে <Link href={`/inventory/${l.itemId}/edit`}>item-এ ঠিক করুন</Link></>}
+                            {src.kind === "purchase" && <Link href={`/doc/${src.docId}`}>Purchase Bill #{src.docNumber} ({src.date})</Link>}
+                            {src.kind === "later_purchase" && <>sold before stock was entered · covered by <Link href={`/doc/${src.docId}`}>Purchase Bill #{src.docNumber} ({src.date})</Link></>}
+                            {src.kind === "sales_return" && <>returned stock (<Link href={`/doc/${src.docId}`}>Sales Return #{src.docNumber}</Link>)</>}
+                            {src.kind === "adjustment" && <>stock added by adjustment ({src.date})</>}
+                            {src.kind === "estimate" && <>no stock and no later purchase — estimated · <Link href={`/inventory/${l.itemId}`}>item দেখুন</Link></>}
+                          </div>
+                        ))}
+                      </div>
+                    )}</td>
                     <td style={{ textAlign: "right" }}>{fq(l.qty)}{l.unit ? " " + l.unit : ""}</td>
                     <td style={{ textAlign: "right" }}>{tk(l.revenue)}</td>
                     <td style={{ textAlign: "right" }}>{l.cost === null ? "--" : tk(l.cost)}</td>

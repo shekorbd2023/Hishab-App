@@ -281,6 +281,11 @@ export async function sendDailySummaries(): Promise<number> {
     try { c = { ...NOTIFY_DEFAULTS, ...JSON.parse(row.json) }; } catch { continue; }
     if (!c.daily_summary || !c.owner_email || !emailReady(c)) continue;
     const bid = row.business_id, day = todayIso();
+    // At most one summary per business per day, however often the endpoint is called.
+    const claimed = await run(
+      "UPDATE notify_config SET json=json_set(json, '$.last_summary_day', ?) WHERE business_id=? AND COALESCE(json_extract(json, '$.last_summary_day'), '') != ?",
+      [day, bid, day]);
+    if (!claimed.changes) continue;
     const sum = async (sql: string) => (await get<{ s: number }>(sql, [bid, day]))?.s ?? 0;
     const sales = await sum("SELECT COALESCE(SUM(total),0) s FROM documents WHERE business_id=? AND kind='sales_invoice' AND date=?");
     const count = await sum("SELECT COUNT(*) s FROM documents WHERE business_id=? AND kind='sales_invoice' AND date=?");

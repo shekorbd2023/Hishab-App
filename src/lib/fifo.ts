@@ -11,8 +11,12 @@
 //  • Sales return → goes back into stock at the cost it was sold at (the original
 //    invoice's FIFO cost when the return was made from it, else the item's latest sale cost).
 //  • Stock adjustment + → stock at the latest known cost; − → removes the oldest stock.
-//  • If more is sold than is in stock, the missing units are costed at the latest known
-//    cost and reported as "short" so the user can see the profit is estimated there.
+//  • If more is sold than is in stock (stock goes negative — e.g. the purchase bill was entered
+//    with a later date), the missing units wait for the NEXT purchase of that item and take its
+//    cost. Only if no purchase ever comes are they costed at the latest known cost / the item's
+//    purchase price. Either way they are reported as "short".
+//  • Every sale remembers WHERE its cost came from (opening stock, which purchase bill, …) so
+//    the invoice profit panel can explain a surprising cost.
 import { all } from "./db";
 
 const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -30,9 +34,16 @@ export type SaleLine = {
   cost: number;      // FIFO cost of the units sold
   shortQty: number;  // units sold with no stock behind them (cost estimated)
   isReturn: boolean; // sales return line: qty/revenue/cost are negative
+  sources: CostSource[]; // where the cost came from, oldest first
 };
 
-type Lot = { qty: number; cost: number };
+/** One slice of a sale's cost: `qty` units at `unitCost` from `kind` (docId/number when it is a document). */
+export type CostSource = {
+  kind: "opening" | "purchase" | "sales_return" | "adjustment" | "later_purchase" | "estimate";
+  qty: number; unitCost: number; docId?: string; docNumber?: number; date?: string;
+};
+
+type Lot = { qty: number; cost: number; src: Omit<CostSource, "qty" | "unitCost"> };
 type Ev = {
   key: string; date: string; created: string; prio: number; itemId: string;
   type: "open" | "buy" | "sret" | "adj+" | "pret" | "sale" | "adj-";
@@ -60,9 +71,13 @@ export async function fifoSales(bid: string): Promise<{ lines: SaleLine[]; onHan
   const adjs = await all<{ id: string; item_id: string; qty_delta: number; date: string; created_at: string }>(
     "SELECT id, item_id, qty_delta, date, created_at FROM stock_adjustments WHERE business_id=?", [bid]);
 
-  // Bill-level discount / charges are shared out over the document's lines by amount.
+  // Bill-level discount / charges are shared out over ALL of the document's lines by amount
+  // (lines not linked to an item take their share too — same rule as docProfits below).
   const docSum: Record<string, number> = {};
-  for (const l of lines) docSum[l.doc_id] = (docSum[l.doc_id] || 0) + (l.amount || 0);
+  for (const r of await all<{ document_id: string; s: number }>(
+    `SELECT di.document_id, COALESCE(SUM(di.amount),0) s FROM doc_items di JOIN documents d ON d.id=di.document_id
+      WHERE d.business_id=? AND d.kind IN ('sales_invoice','purchase_bill','sales_return','purchase_return') GROUP BY di.document_id`, [bid]))
+    docSum[r.document_id] = r.s;
   const chargesOf = (s: string | null) => {
     try { return (JSON.parse(s || "[]") as { amount?: number }[]).reduce((a, c) => a + (Number(c.amount) || 0), 0); } catch { return 0; }
   };
@@ -102,47 +117,82 @@ export async function fifoSales(bid: string): Promise<{ lines: SaleLine[]; onHan
   const lastSaleCost: Record<string, number> = {}; // latest sold unit cost per item
   const saleCostByDocItem: Record<string, number> = {}; // `${docId}:${itemId}` → unit cost
   const out: SaleLine[] = [];
+  // Units sold with no stock behind them, waiting for the next purchase of the item.
+  const backlog: Record<string, { idx: number; qty: number; estUnit: number }[]> = {};
 
   const take = (itemId: string, qty: number) => {
     const q = (lots[itemId] ||= []);
     let need = qty, cost = 0;
+    const sources: CostSource[] = [];
     while (need > EPS && q.length) {
       const lot = q[0];
       const use = Math.min(lot.qty, need);
       cost += use * lot.cost; lot.qty -= use; need -= use;
+      const last = sources[sources.length - 1];
+      if (last && last.kind === lot.src.kind && last.docId === lot.src.docId && Math.abs(last.unitCost - lot.cost) < 1e-6) last.qty += use;
+      else sources.push({ ...lot.src, qty: use, unitCost: lot.cost });
       if (lot.qty <= EPS) q.shift();
     }
-    return { cost, short: need > EPS ? need : 0 };
+    return { cost, short: need > EPS ? need : 0, sources };
   };
   const known = (itemId: string) => lastCost[itemId] ?? fallback[itemId] ?? 0;
+
+  /** A new lot arrived: first settle earlier sales that were made without stock, at this lot's cost. */
+  const settleBacklog = (itemId: string, lot: Lot) => {
+    const bl = backlog[itemId];
+    while (bl && bl.length && lot.qty > EPS) {
+      const b = bl[0];
+      const use = Math.min(b.qty, lot.qty);
+      const sale = out[b.idx];
+      sale.cost = r2(sale.cost + use * (lot.cost - b.estUnit));
+      const est = sale.sources.find((x) => x.kind === "estimate");
+      if (est) { est.qty -= use; if (est.qty <= EPS) sale.sources.splice(sale.sources.indexOf(est), 1); }
+      sale.sources.push({ kind: "later_purchase", qty: use, unitCost: lot.cost, docId: lot.src.docId, docNumber: lot.src.docNumber, date: lot.src.date });
+      saleCostByDocItem[`${sale.docId}:${itemId}`] = sale.cost / sale.qty;
+      lastSaleCost[itemId] = sale.cost / sale.qty;
+      b.qty -= use; lot.qty -= use;
+      if (b.qty <= EPS) bl.shift();
+    }
+  };
 
   for (const e of evs) {
     const q = (lots[e.itemId] ||= []);
     switch (e.type) {
-      case "open": case "buy":
-        q.push({ qty: e.qty, cost: e.unitCost || 0 });
+      case "open": case "buy": {
+        const lot: Lot = { qty: e.qty, cost: e.unitCost || 0, src: e.type === "open" ? { kind: "opening" } : { kind: "purchase", docId: e.docId, docNumber: e.docNumber, date: e.date } };
         lastCost[e.itemId] = e.unitCost || 0;
+        settleBacklog(e.itemId, lot);
+        if (lot.qty > EPS) q.push(lot);
         break;
-      case "adj+":
-        q.push({ qty: e.qty, cost: known(e.itemId) });
+      }
+      case "adj+": {
+        const lot: Lot = { qty: e.qty, cost: known(e.itemId), src: { kind: "adjustment", date: e.date } };
+        settleBacklog(e.itemId, lot);
+        if (lot.qty > EPS) q.push(lot);
         break;
+      }
       case "pret": case "adj-":
         take(e.itemId, e.qty);
         break;
       case "sale": {
         const t = take(e.itemId, e.qty);
-        const cost = t.cost + t.short * known(e.itemId);
+        const est = known(e.itemId);
+        const cost = t.cost + t.short * est;
         const unit = cost / e.qty;
         lastSaleCost[e.itemId] = unit;
         saleCostByDocItem[`${e.docId}:${e.itemId}`] = unit;
-        out.push({ lineId: e.lineId!, docId: e.docId!, docNumber: e.docNumber!, date: e.date, itemId: e.itemId, party: e.party ?? null, qty: e.qty, revenue: r2(e.revenue || 0), cost: r2(cost), shortQty: t.short, isReturn: false });
+        if (t.short > EPS) t.sources.push({ kind: "estimate", qty: t.short, unitCost: est });
+        out.push({ lineId: e.lineId!, docId: e.docId!, docNumber: e.docNumber!, date: e.date, itemId: e.itemId, party: e.party ?? null, qty: e.qty, revenue: r2(e.revenue || 0), cost: r2(cost), shortQty: t.short, isReturn: false, sources: t.sources });
+        if (t.short > EPS) (backlog[e.itemId] ||= []).push({ idx: out.length - 1, qty: t.short, estUnit: est });
         break;
       }
       case "sret": {
         const fromSource = e.sourceId ? saleCostByDocItem[`${e.sourceId}:${e.itemId}`] : undefined;
         const unit = fromSource ?? lastSaleCost[e.itemId] ?? known(e.itemId);
-        q.unshift({ qty: e.qty, cost: unit }); // returned goods are sold again first
-        out.push({ lineId: e.lineId!, docId: e.docId!, docNumber: e.docNumber!, date: e.date, itemId: e.itemId, party: e.party ?? null, qty: -e.qty, revenue: -r2(e.revenue || 0), cost: -r2(unit * e.qty), shortQty: 0, isReturn: true });
+        const lot: Lot = { qty: e.qty, cost: unit, src: { kind: "sales_return", docId: e.docId, docNumber: e.docNumber, date: e.date } };
+        settleBacklog(e.itemId, lot);
+        if (lot.qty > EPS) q.unshift(lot); // returned goods are sold again first
+        out.push({ lineId: e.lineId!, docId: e.docId!, docNumber: e.docNumber!, date: e.date, itemId: e.itemId, party: e.party ?? null, qty: -e.qty, revenue: -r2(e.revenue || 0), cost: -r2(unit * e.qty), shortQty: 0, isReturn: true, sources: [{ kind: "sales_return", qty: e.qty, unitCost: unit, docId: e.docId, docNumber: e.docNumber, date: e.date }] });
         break;
       }
     }
@@ -167,7 +217,7 @@ export async function itemProfits(bid: string, from: string, to: string): Promis
   return res;
 }
 
-export type DocProfitLine = { lineId: string; name: string; itemId: string | null; qty: number; unit: string | null; revenue: number; cost: number | null; profit: number | null; shortQty: number };
+export type DocProfitLine = { lineId: string; name: string; itemId: string | null; qty: number; unit: string | null; revenue: number; cost: number | null; profit: number | null; shortQty: number; sources: CostSource[] };
 export type DocProfit = { docId: string; number: number; kind: string; date: string; party: string | null; revenue: number; cost: number; profit: number; unlinked: number; lines: DocProfitLine[] };
 
 /**
@@ -197,12 +247,12 @@ export async function docProfits(bid: string, opts: { from?: string; to?: string
     const f = byLine.get(r.line_id);
     let line: DocProfitLine;
     if (f) {
-      line = { lineId: r.line_id, name: r.name || "", itemId: r.item_id, qty: f.qty, unit: r.unit, revenue: f.revenue, cost: f.cost, profit: r2(f.revenue - f.cost), shortQty: f.shortQty };
+      line = { lineId: r.line_id, name: r.name || "", itemId: r.item_id, qty: f.qty, unit: r.unit, revenue: f.revenue, cost: f.cost, profit: r2(f.revenue - f.cost), shortQty: f.shortQty, sources: f.sources };
     } else {
       // unlinked line (no item): revenue only, same discount/tax treatment as FIFO lines
       const share = r.line_sum ? (r.amount || 0) / r.line_sum : 0;
       const rev = Math.max(0, (r.amount || 0) / (1 + (r.tax_rate || 0) / 100) - share * (r.doc_discount || 0));
-      line = { lineId: r.line_id, name: r.name || "", itemId: r.item_id, qty: sign * (r.qty || 0), unit: r.unit, revenue: r2(sign * rev), cost: null, profit: null, shortQty: 0 };
+      line = { lineId: r.line_id, name: r.name || "", itemId: r.item_id, qty: sign * (r.qty || 0), unit: r.unit, revenue: r2(sign * rev), cost: null, profit: null, shortQty: 0, sources: [] };
       d.unlinked += line.revenue;
     }
     d.lines.push(line);

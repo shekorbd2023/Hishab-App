@@ -169,7 +169,18 @@ export async function syncOrder(bid: string, source: string, p: OrderPayload): P
       businessId: bid, kind: "sales_invoice" as const, partyId, date: p.date || todayIso(), notes, lines, charges,
       docDiscount: p.discount || 0, paidAmount: 0, createdBy: undefined,
     };
-    const res = doc ? await updateDocument(doc.id, { ...input, number: doc.number }) : await createDocument(input);
+    // Re-syncing an order must not wipe money already recorded with the invoice in Hishab
+    // (updateDocument replaces the automatic "received with invoice" payment with paidAmount).
+    let keep: { paid: number; accountId: string | null } = { paid: 0, accountId: null };
+    if (doc) {
+      const auto = await get<{ s: number; acc: string | null }>(
+        "SELECT COALESCE(SUM(amount),0) s, MAX(account_id) acc FROM payments WHERE document_id=? AND is_auto=1", [doc.id]);
+      const cur = await get<{ account_id: string | null }>("SELECT account_id FROM documents WHERE id=?", [doc.id]);
+      keep = { paid: auto?.s || 0, accountId: cur?.account_id ?? auto?.acc ?? null };
+    }
+    const res = doc
+      ? await updateDocument(doc.id, { ...input, number: doc.number, paidAmount: keep.paid, accountId: keep.accountId })
+      : await createDocument(input);
     await logAudit({ businessId: bid, userName: "Website", action: doc ? "update" : "create", entity: "sales_invoice", entityId: res.id,
       summary: `${doc ? "Updated" : "Created"} Sales #${res.number} from website order ${label} — ${res.total}${unmatched.length ? ` (${unmatched.length} product(s) not linked to an item)` : ""}` });
     await save("synced", res.id, unmatched);
